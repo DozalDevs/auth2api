@@ -557,9 +557,16 @@ export interface ResponsesToChatState {
   itemIdToCallId: Map<string, string>;
   nextToolIndex: number;
   finishReason: string;
+  // When true, emit an OpenAI-style usage chunk (empty `choices`,
+  // populated `usage`) just before `data: [DONE]`. Mirrors
+  // `StreamState.includeUsage` on the anthropic→chat path.
+  includeUsage: boolean;
 }
 
-export function makeResponsesToChatState(model: string): ResponsesToChatState {
+export function makeResponsesToChatState(
+  model: string,
+  includeUsage: boolean,
+): ResponsesToChatState {
   return {
     id: `chatcmpl-${compactUuid().slice(0, 24)}`,
     created: Math.floor(Date.now() / 1000),
@@ -570,6 +577,7 @@ export function makeResponsesToChatState(model: string): ResponsesToChatState {
     itemIdToCallId: new Map(),
     nextToolIndex: 0,
     finishReason: "stop",
+    includeUsage,
   };
 }
 
@@ -587,6 +595,36 @@ function buildChatChunk(
     choices: [
       { index: 0, delta, finish_reason: finishReason, logprobs: null },
     ],
+  };
+  return `data: ${JSON.stringify(payload)}\n\n`;
+}
+
+/**
+ * The trailing usage-only chunk OpenAI emits when the caller asked for
+ * `stream_options.include_usage`. It carries an empty `choices` array —
+ * clients keying off `choices[0]` must skip it rather than read a delta.
+ */
+function buildUsageChunk(state: ResponsesToChatState, usage: any): string {
+  const inputTokens = usage?.input_tokens || 0;
+  const outputTokens = usage?.output_tokens || 0;
+  const payload = {
+    id: state.id,
+    object: "chat.completion.chunk",
+    created: state.created,
+    model: state.model,
+    system_fingerprint: state.fingerprint,
+    choices: [],
+    usage: {
+      prompt_tokens: inputTokens,
+      completion_tokens: outputTokens,
+      total_tokens: inputTokens + outputTokens,
+      prompt_tokens_details: {
+        cached_tokens: usage?.input_tokens_details?.cached_tokens || 0,
+      },
+      completion_tokens_details: {
+        reasoning_tokens: usage?.output_tokens_details?.reasoning_tokens || 0,
+      },
+    },
   };
   return `data: ${JSON.stringify(payload)}\n\n`;
 }
@@ -683,9 +721,11 @@ export function responsesSSEToChat(
       if (status === "incomplete" && state.finishReason === "stop") {
         state.finishReason = "length";
       }
+      const usage = data?.response?.usage;
       return [
         ...ensureRolePrimer(state),
         buildChatChunk(state, {}, state.finishReason),
+        ...(state.includeUsage && usage ? [buildUsageChunk(state, usage)] : []),
         "data: [DONE]\n\n",
       ];
     }

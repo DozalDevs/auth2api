@@ -103,7 +103,8 @@ async function proxyCodexChatCompletions(args: {
       }),
     success: async (upstream, account) => {
       if (stream) {
-        const state = makeResponsesToChatState(model);
+        const includeUsage = body.stream_options?.include_usage !== false;
+        const state = makeResponsesToChatState(model, includeUsage);
         const result = await handleStreamingResponse(upstream, resp, {
           onEvent: (event, data) => responsesSSEToChat(event, data, state),
         });

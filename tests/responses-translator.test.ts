@@ -293,7 +293,7 @@ test("responsesToAnthropicMessage: emits thinking + text + tool_use blocks in or
 // ───────────────── responsesSSEToChat (streaming) ─────────────────
 
 test("responsesSSEToChat: emits role primer, text deltas, finish + [DONE]", () => {
-  const state = makeResponsesToChatState("gpt-5.5-medium");
+  const state = makeResponsesToChatState("gpt-5.5-medium", true);
   const chunks: string[] = [];
   chunks.push(...responsesSSEToChat("response.created", { type: "response.created" }, state));
   chunks.push(
@@ -325,8 +325,85 @@ test("responsesSSEToChat: emits role primer, text deltas, finish + [DONE]", () =
   assert.equal(new Set(ids).size, 1);
 });
 
+test("responsesSSEToChat: emits a trailing usage chunk when includeUsage is set", () => {
+  const state = makeResponsesToChatState("gpt-5.5-medium", true);
+  const chunks = [
+    ...responsesSSEToChat("response.output_text.delta", { delta: "Hi" }, state),
+    ...responsesSSEToChat(
+      "response.completed",
+      {
+        response: {
+          status: "completed",
+          usage: {
+            input_tokens: 11,
+            output_tokens: 5,
+            input_tokens_details: { cached_tokens: 3 },
+            output_tokens_details: { reasoning_tokens: 2 },
+          },
+        },
+      },
+      state,
+    ),
+  ];
+
+  // The usage chunk must be the last frame before the [DONE] sentinel.
+  assert.equal(chunks.at(-1), "data: [DONE]\n\n");
+  const usageChunk = JSON.parse(chunks.at(-2)!.replace(/^data: /, ""));
+
+  assert.equal(usageChunk.object, "chat.completion.chunk");
+  assert.equal(usageChunk.id, state.id);
+  assert.equal(usageChunk.model, "gpt-5.5-medium");
+  // OpenAI sends the usage frame with an EMPTY choices array.
+  assert.deepEqual(usageChunk.choices, []);
+  assert.equal(usageChunk.usage.prompt_tokens, 11);
+  assert.equal(usageChunk.usage.completion_tokens, 5);
+  assert.equal(usageChunk.usage.total_tokens, 16);
+  assert.equal(usageChunk.usage.prompt_tokens_details.cached_tokens, 3);
+  assert.equal(usageChunk.usage.completion_tokens_details.reasoning_tokens, 2);
+
+  // The finish chunk must still be emitted, and still carry a choice.
+  const finishChunk = JSON.parse(chunks.at(-3)!.replace(/^data: /, ""));
+  assert.equal(finishChunk.choices[0].finish_reason, "stop");
+});
+
+test("responsesSSEToChat: omits the usage chunk when includeUsage is false", () => {
+  const state = makeResponsesToChatState("gpt-5.5-medium", false);
+  const chunks = [
+    ...responsesSSEToChat("response.output_text.delta", { delta: "Hi" }, state),
+    ...responsesSSEToChat(
+      "response.completed",
+      {
+        response: {
+          status: "completed",
+          usage: { input_tokens: 11, output_tokens: 5 },
+        },
+      },
+      state,
+    ),
+  ];
+  const all = chunks.join("");
+  assert.ok(!all.includes('"usage"'));
+  assert.equal(chunks.at(-1), "data: [DONE]\n\n");
+  assert.match(all, /"finish_reason":"stop"/);
+});
+
+test("responsesSSEToChat: emits no usage chunk when upstream reports no usage", () => {
+  // Codex omits `usage` on some terminal events. Emitting a usage frame
+  // of all zeros there would be indistinguishable from a genuinely free
+  // call, so the frame must be suppressed entirely instead.
+  const state = makeResponsesToChatState("gpt-5.5-medium", true);
+  const chunks = responsesSSEToChat(
+    "response.completed",
+    { response: { status: "completed" } },
+    state,
+  );
+  const all = chunks.join("");
+  assert.ok(!all.includes('"usage"'));
+  assert.equal(chunks.at(-1), "data: [DONE]\n\n");
+});
+
 test("responsesSSEToChat: routes reasoning deltas to reasoning_content", () => {
-  const state = makeResponsesToChatState("gpt-5.5-medium-thinking");
+  const state = makeResponsesToChatState("gpt-5.5-medium-thinking", true);
   const chunks = [
     ...responsesSSEToChat(
       "response.reasoning_summary_text.delta",
@@ -344,7 +421,7 @@ test("responsesSSEToChat: routes reasoning deltas to reasoning_content", () => {
 });
 
 test("responsesSSEToChat: streams tool_call argument deltas", () => {
-  const state = makeResponsesToChatState("gpt-5.5-medium");
+  const state = makeResponsesToChatState("gpt-5.5-medium", true);
   const chunks = [
     ...responsesSSEToChat(
       "response.output_item.added",
@@ -387,7 +464,7 @@ test("responsesSSEToChat: tool_call arg deltas resolve when item_id differs from
   // the dual-key fix it only stored `call_id`, so all argument
   // deltas were silently dropped — clients got the function name
   // but no arguments.
-  const state = makeResponsesToChatState("gpt-5.5-medium");
+  const state = makeResponsesToChatState("gpt-5.5-medium", true);
   const chunks = [
     ...responsesSSEToChat(
       "response.output_item.added",
