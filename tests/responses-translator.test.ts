@@ -243,6 +243,31 @@ test("responsesToChatCompletion: assembles text + reasoning + tool calls", () =>
   assert.equal(completion.usage.prompt_tokens, 10);
   assert.equal(completion.usage.completion_tokens, 5);
   assert.equal(completion.usage.total_tokens, 15);
+  assert.equal(completion.usage.prompt_tokens_details.cached_tokens, 0);
+  assert.equal(completion.usage.completion_tokens_details.reasoning_tokens, 0);
+});
+
+test("responsesToChatCompletion: forwards reasoning and cached token details", () => {
+  const completion = responsesToChatCompletion(
+    {
+      status: "completed",
+      output: [
+        { type: "message", content: [{ type: "output_text", text: "hi" }] },
+      ],
+      usage: {
+        input_tokens: 100,
+        output_tokens: 60,
+        input_tokens_details: { cached_tokens: 40 },
+        output_tokens_details: { reasoning_tokens: 45 },
+      },
+    },
+    "gpt-5.6-luna",
+  );
+  assert.equal(completion.usage.prompt_tokens, 100);
+  assert.equal(completion.usage.completion_tokens, 60);
+  assert.equal(completion.usage.total_tokens, 160);
+  assert.equal(completion.usage.prompt_tokens_details.cached_tokens, 40);
+  assert.equal(completion.usage.completion_tokens_details.reasoning_tokens, 45);
 });
 
 test("responsesToChatCompletion: incomplete status maps to length finish_reason", () => {

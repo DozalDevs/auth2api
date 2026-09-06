@@ -477,6 +477,15 @@ export function responsesToChatCompletion(resp: any, model: string): any {
       completion_tokens: resp?.usage?.output_tokens || 0,
       total_tokens:
         (resp?.usage?.input_tokens || 0) + (resp?.usage?.output_tokens || 0),
+      // Mirrors the streamed usage frame (buildUsageChunk). reasoning_tokens
+      // is a SUBSET of completion_tokens — never add it to any total.
+      prompt_tokens_details: {
+        cached_tokens: resp?.usage?.input_tokens_details?.cached_tokens || 0,
+      },
+      completion_tokens_details: {
+        reasoning_tokens:
+          resp?.usage?.output_tokens_details?.reasoning_tokens || 0,
+      },
     },
   };
 }
