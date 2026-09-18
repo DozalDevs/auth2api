@@ -421,6 +421,23 @@ export function anthropicToResponsesRequest(body: any): any {
 // 3. Responses non-streaming response → OpenAI Chat Completions
 // ─────────────────────────────────────────────────────────────────────
 
+/**
+ * Codex reports a per-field and per-item token breakdown under
+ * `usage.attribution` (`request_fields` / `items`, each carrying
+ * input_tokens / cached_tokens / cache_write_tokens). It has no OpenAI
+ * equivalent, so we pass it through verbatim rather than reshaping it —
+ * a consumer measuring which part of a prompt costs what needs the raw
+ * structure, and the upstream shape is theirs to change, not ours.
+ *
+ * Absent upstream, the key is omitted entirely: an empty object would
+ * read as "attributed to nothing" instead of "not reported".
+ */
+function attachAttribution(target: any, usage: any): void {
+  if (usage?.attribution !== undefined && usage.attribution !== null) {
+    target.attribution = usage.attribution;
+  }
+}
+
 export function responsesToChatCompletion(resp: any, model: string): any {
   let textOut = "";
   let reasoningOut = "";
@@ -458,6 +475,23 @@ export function responsesToChatCompletion(resp: any, model: string): any {
   if (toolCalls.length) finishReason = "tool_calls";
   else if (resp?.status === "incomplete") finishReason = "length";
 
+  const usage: any = {
+    prompt_tokens: resp?.usage?.input_tokens || 0,
+    completion_tokens: resp?.usage?.output_tokens || 0,
+    total_tokens:
+      (resp?.usage?.input_tokens || 0) + (resp?.usage?.output_tokens || 0),
+    // Mirrors the streamed usage frame (buildUsageChunk). reasoning_tokens
+    // is a SUBSET of completion_tokens — never add it to any total.
+    prompt_tokens_details: {
+      cached_tokens: resp?.usage?.input_tokens_details?.cached_tokens || 0,
+    },
+    completion_tokens_details: {
+      reasoning_tokens:
+        resp?.usage?.output_tokens_details?.reasoning_tokens || 0,
+    },
+  };
+  attachAttribution(usage, resp?.usage);
+
   return {
     id: `chatcmpl-${compactUuid().slice(0, 24)}`,
     object: "chat.completion",
@@ -472,21 +506,7 @@ export function responsesToChatCompletion(resp: any, model: string): any {
         logprobs: null,
       },
     ],
-    usage: {
-      prompt_tokens: resp?.usage?.input_tokens || 0,
-      completion_tokens: resp?.usage?.output_tokens || 0,
-      total_tokens:
-        (resp?.usage?.input_tokens || 0) + (resp?.usage?.output_tokens || 0),
-      // Mirrors the streamed usage frame (buildUsageChunk). reasoning_tokens
-      // is a SUBSET of completion_tokens — never add it to any total.
-      prompt_tokens_details: {
-        cached_tokens: resp?.usage?.input_tokens_details?.cached_tokens || 0,
-      },
-      completion_tokens_details: {
-        reasoning_tokens:
-          resp?.usage?.output_tokens_details?.reasoning_tokens || 0,
-      },
-    },
+    usage,
   };
 }
 
@@ -616,6 +636,18 @@ function buildChatChunk(
 function buildUsageChunk(state: ResponsesToChatState, usage: any): string {
   const inputTokens = usage?.input_tokens || 0;
   const outputTokens = usage?.output_tokens || 0;
+  const usageOut: any = {
+    prompt_tokens: inputTokens,
+    completion_tokens: outputTokens,
+    total_tokens: inputTokens + outputTokens,
+    prompt_tokens_details: {
+      cached_tokens: usage?.input_tokens_details?.cached_tokens || 0,
+    },
+    completion_tokens_details: {
+      reasoning_tokens: usage?.output_tokens_details?.reasoning_tokens || 0,
+    },
+  };
+  attachAttribution(usageOut, usage);
   const payload = {
     id: state.id,
     object: "chat.completion.chunk",
@@ -623,17 +655,7 @@ function buildUsageChunk(state: ResponsesToChatState, usage: any): string {
     model: state.model,
     system_fingerprint: state.fingerprint,
     choices: [],
-    usage: {
-      prompt_tokens: inputTokens,
-      completion_tokens: outputTokens,
-      total_tokens: inputTokens + outputTokens,
-      prompt_tokens_details: {
-        cached_tokens: usage?.input_tokens_details?.cached_tokens || 0,
-      },
-      completion_tokens_details: {
-        reasoning_tokens: usage?.output_tokens_details?.reasoning_tokens || 0,
-      },
-    },
+    usage: usageOut,
   };
   return `data: ${JSON.stringify(payload)}\n\n`;
 }

@@ -268,6 +268,38 @@ test("responsesToChatCompletion: forwards reasoning and cached token details", (
   assert.equal(completion.usage.total_tokens, 160);
   assert.equal(completion.usage.prompt_tokens_details.cached_tokens, 40);
   assert.equal(completion.usage.completion_tokens_details.reasoning_tokens, 45);
+  assert.ok(!("attribution" in completion.usage));
+});
+
+test("responsesToChatCompletion: forwards usage.attribution verbatim", () => {
+  const attribution = {
+    request_fields: {
+      instructions: {
+        input_tokens: 8200,
+        cached_tokens: 8192,
+        cache_write_tokens: 0,
+      },
+      input: { input_tokens: 512, cached_tokens: 0, cache_write_tokens: 512 },
+    },
+    items: {
+      msg_abc: { input_tokens: 512, cached_tokens: 0, cache_write_tokens: 512 },
+    },
+  };
+  const completion = responsesToChatCompletion(
+    {
+      status: "completed",
+      output: [
+        { type: "message", content: [{ type: "output_text", text: "hi" }] },
+      ],
+      usage: { input_tokens: 8712, output_tokens: 20, attribution },
+    },
+    "gpt-5.6-luna",
+  );
+  assert.deepEqual(completion.usage.attribution, attribution);
+  assert.equal(
+    completion.usage.attribution.request_fields.instructions.input_tokens,
+    8200,
+  );
 });
 
 test("responsesToChatCompletion: incomplete status maps to length finish_reason", () => {
@@ -385,10 +417,47 @@ test("responsesSSEToChat: emits a trailing usage chunk when includeUsage is set"
   assert.equal(usageChunk.usage.total_tokens, 16);
   assert.equal(usageChunk.usage.prompt_tokens_details.cached_tokens, 3);
   assert.equal(usageChunk.usage.completion_tokens_details.reasoning_tokens, 2);
+  assert.ok(!("attribution" in usageChunk.usage));
 
   // The finish chunk must still be emitted, and still carry a choice.
   const finishChunk = JSON.parse(chunks.at(-3)!.replace(/^data: /, ""));
   assert.equal(finishChunk.choices[0].finish_reason, "stop");
+});
+
+test("responsesSSEToChat: forwards usage.attribution verbatim on the usage chunk", () => {
+  const attribution = {
+    request_fields: {
+      instructions: {
+        input_tokens: 8200,
+        cached_tokens: 8192,
+        cache_write_tokens: 0,
+      },
+    },
+    items: {
+      msg_abc: { input_tokens: 512, cached_tokens: 0, cache_write_tokens: 512 },
+    },
+  };
+  const state = makeResponsesToChatState("gpt-5.6-luna", true);
+  const chunks = [
+    ...responsesSSEToChat("response.output_text.delta", { delta: "Hi" }, state),
+    ...responsesSSEToChat(
+      "response.completed",
+      {
+        response: {
+          status: "completed",
+          usage: { input_tokens: 8712, output_tokens: 20, attribution },
+        },
+      },
+      state,
+    ),
+  ];
+
+  const usageChunk = JSON.parse(chunks.at(-2)!.replace(/^data: /, ""));
+  assert.deepEqual(usageChunk.usage.attribution, attribution);
+  assert.equal(
+    usageChunk.usage.attribution.request_fields.instructions.input_tokens,
+    8200,
+  );
 });
 
 test("responsesSSEToChat: omits the usage chunk when includeUsage is false", () => {
