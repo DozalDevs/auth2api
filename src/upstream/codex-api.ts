@@ -10,11 +10,13 @@ const RESPONSES_PATH = "/codex/responses";
 const RESPONSES_COMPACT_PATH = "/codex/responses/compact";
 
 const DEFAULT_ORIGINATOR = "codex_cli_rs";
-// Bumped from 0.40.0 — backend now version-gates `gpt-5.3-codex` and rejects
-// older versions with "requires a newer version of Codex". Matches latest
-// @openai/codex on npm at the time of writing. Override via
+// The backend version-gates models on this. gpt-5.3-codex needed a bump from
+// 0.40.0; gpt-6-luna needs 0.155.0 or newer and answers anything older with
+// "The 'gpt-6-luna' model is not supported when using Codex with a ChatGPT
+// account." (measured 2026-09-23: 0.154.0 refused, 0.155.0 served). Matches the
+// latest @openai/codex on npm at the time of writing. Override via
 // `cloaking.codex.cli-version` if upstream's minimum changes again.
-const DEFAULT_CLI_VERSION = "0.125.0";
+const DEFAULT_CLI_VERSION = "0.156.1";
 
 function buildUserAgent(config: Config): string {
   const codex = config.cloaking.codex || {};
