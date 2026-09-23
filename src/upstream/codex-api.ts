@@ -1,4 +1,5 @@
 import { Request } from "express";
+import { createHash } from "node:crypto";
 import { v4 as uuidv4 } from "uuid";
 import { Config } from "../config";
 import { AvailableAccount } from "../accounts/manager";
@@ -133,6 +134,56 @@ function compactSessionSeed(body: any, request: Request): string {
   return promptCacheKey || uuidv4();
 }
 
+// The Responses API caps `prompt_cache_key` at 64 characters and rejects a
+// longer one outright, so anything we forward must fit.
+const MAX_CACHE_KEY_LENGTH = 64;
+// Printable ASCII with no spaces: safe as both a JSON string and an HTTP
+// header value (a CR/LF or non-ASCII byte would make fetch throw).
+const SAFE_CACHE_KEY = /^[\x21-\x7e]+$/;
+
+/**
+ * Makes a caller-supplied conversation key safe to forward. A key that is
+ * already short and header-safe goes through untouched; anything else is
+ * replaced by its SHA-256 hex digest (exactly 64 chars). Hashing rather than
+ * truncating keeps the result stable per conversation AND distinct between
+ * conversations — two long keys sharing a 64-char prefix must never collapse
+ * into one cache bucket.
+ */
+function normalizeCacheKey(raw: string): string {
+  if (raw.length <= MAX_CACHE_KEY_LENGTH && SAFE_CACHE_KEY.test(raw)) {
+    return raw;
+  }
+  return createHash("sha256").update(raw).digest("hex");
+}
+
+/**
+ * The stable per-conversation key the caller supplied, or "" when it
+ * supplied none. Never synthesised: with no caller key the request goes
+ * upstream exactly as before.
+ *
+ * Accepted sources, first match wins:
+ *   - `session-id` header (official codex CLI)
+ *   - `session_id` / `x-session-affinity` headers (pi's
+ *     `sendSessionAffinityHeaders`, older codex CLIs)
+ *   - body `prompt_cache_key` (native Responses callers, and chat callers —
+ *     `chatToResponsesRequest` carries it across the translation)
+ */
+function conversationCacheKey(request: Request, body: any): string {
+  const fromBody =
+    body && typeof body.prompt_cache_key === "string"
+      ? body.prompt_cache_key.trim()
+      : "";
+  const raw =
+    firstHeader(request, "session-id").trim() ||
+    firstHeader(request, "session_id").trim() ||
+    firstHeader(request, "x-session-affinity").trim() ||
+    fromBody;
+  return raw ? normalizeCacheKey(raw) : "";
+}
+
+/** @internal — exported for unit tests; do not use from app code. */
+export const __conversationCacheKey = conversationCacheKey;
+
 export interface CallCodexResponsesOptions {
   body?: any;
   request: Request;
@@ -156,19 +207,34 @@ export async function callCodexResponses(
     : config.timeouts["messages-ms"];
   const headers = buildHeaders(account, stream, config);
 
+  let outBody = body;
   if (isCompact) {
     headers.Accept = "application/json";
     const seed = compactSessionSeed(request.body ?? body, request);
     headers.session_id = firstHeader(request, "session_id").trim() || seed;
     headers.conversation_id =
       firstHeader(request, "conversation_id").trim() || seed;
+  } else {
+    // Mirror the official codex CLI (codex-rs/core/src/client.rs): one stable
+    // per-conversation key, sent as body `prompt_cache_key` AND as the
+    // `session-id` header ("ChatGPT derives cache affinity from the Responses
+    // session-id header"), with `thread-id` and `x-client-request-id`
+    // alongside. Without it the backend does not route a conversation's turns
+    // to the same cache, so every turn re-pays for its whole prefix.
+    const key = conversationCacheKey(request, body);
+    if (key) {
+      outBody = { ...body, prompt_cache_key: key };
+      headers["session-id"] = key;
+      headers["thread-id"] = key;
+      headers["x-client-request-id"] = key;
+    }
   }
 
   try {
     return await fetch(url, {
       method: "POST",
       headers,
-      body: JSON.stringify(body),
+      body: JSON.stringify(outBody),
       signal: withTimeoutSignal(timeoutMs, options.signal),
     });
   } catch (err: any) {
