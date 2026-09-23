@@ -16,9 +16,12 @@ const CODEX_OAUTH: ProviderOAuthInfo = {
   callbackPath: CODEX_CALLBACK_PATH,
 };
 
-// gpt-5*, o\d* (o3, o4-mini), codex-* — but NOT legacy gpt-3/gpt-4* which the
-// codex backend doesn't serve.
-const MODEL_RE = /^(gpt-5(\.|-)|gpt-5$|o\d|codex-)/i;
+// gpt-5 and every later generation (gpt-6-luna, gpt-6-sol, ...), o\d* (o3,
+// o4-mini), codex-* — but NOT legacy gpt-3/gpt-4* which the codex backend
+// doesn't serve. The generation is matched as a number rather than a literal 5
+// so a new model family routes here the day the account can see it, instead of
+// silently falling through to the anthropic default.
+const MODEL_RE = /^(gpt-([5-9]|[1-9]\d+)(\.|-|$)|o\d|codex-)/i;
 
 export function buildCodexProvider(authDir: string): Provider {
   const manager = new AccountManager(authDir, {

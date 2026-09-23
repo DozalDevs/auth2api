@@ -90,6 +90,13 @@ test("providerForModel routes by model name", () => {
     assert.equal(registry.forModel("gpt-5.4-mini").id, "codex");
     assert.equal(registry.forModel("gpt-5.3-codex").id, "codex");
     assert.equal(registry.forModel("gpt-5.2").id, "codex");
+    assert.equal(registry.forModel("gpt-5.6-luna").id, "codex");
+    // Later generations route to codex without a regex edit per release.
+    assert.equal(registry.forModel("gpt-6-luna").id, "codex");
+    assert.equal(registry.forModel("gpt-6-sol").id, "codex");
+    assert.equal(registry.forModel("gpt-6-astra").id, "codex");
+    assert.equal(registry.forModel("gpt-6").id, "codex");
+    assert.equal(registry.forModel("gpt-10").id, "codex");
     assert.equal(registry.forModel("o3").id, "codex");
     assert.equal(registry.forModel("o4-mini").id, "codex");
     assert.equal(registry.forModel("codex-mini-latest").id, "codex");
@@ -98,6 +105,7 @@ test("providerForModel routes by model name", () => {
     assert.equal(registry.forModel("gpt-4").id, "anthropic");
     assert.equal(registry.forModel("gpt-4o").id, "anthropic");
     assert.equal(registry.forModel("gpt-4o-mini").id, "anthropic");
+    assert.equal(registry.forModel("gpt-4.1").id, "anthropic");
     // Unknown model defaults to anthropic for backwards compatibility.
     assert.equal(registry.forModel("unknown-model").id, "anthropic");
   } finally {
