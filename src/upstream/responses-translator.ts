@@ -182,6 +182,11 @@ export function chatToResponsesRequest(body: any): any {
   const maxTokens = body.max_completion_tokens ?? body.max_tokens;
   if (maxTokens !== undefined) out.max_output_tokens = maxTokens;
   if (body.user) out.user = body.user;
+  // Chat Completions and Responses share this field verbatim. Carrying it is
+  // what lets a chat caller's conversation key reach the codex backend.
+  if (typeof body.prompt_cache_key === "string") {
+    out.prompt_cache_key = body.prompt_cache_key;
+  }
 
   if (body.reasoning_effort) {
     out.reasoning = { effort: body.reasoning_effort };
