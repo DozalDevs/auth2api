@@ -12,34 +12,7 @@ import {
   createCountTokensHandler,
 } from "./handlers/anthropic";
 import { StatsRecorder } from "./stats/recorder";
-
-// Simple in-memory rate limiter per IP
-const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
-const RATE_LIMIT_WINDOW_MS = 60 * 1000;
-const RATE_LIMIT_MAX = 60;
-
-function rateLimit(ip: string): boolean {
-  const now = Date.now();
-  const entry = rateLimitMap.get(ip);
-  if (!entry || now > entry.resetAt) {
-    rateLimitMap.set(ip, { count: 1, resetAt: now + RATE_LIMIT_WINDOW_MS });
-    return true;
-  }
-  entry.count++;
-  return entry.count <= RATE_LIMIT_MAX;
-}
-
-// Cleanup stale entries every 5 minutes
-const cleanupTimer = setInterval(
-  () => {
-    const now = Date.now();
-    for (const [ip, entry] of rateLimitMap) {
-      if (now > entry.resetAt) rateLimitMap.delete(ip);
-    }
-  },
-  5 * 60 * 1000,
-);
-cleanupTimer.unref();
+import { RateLimiter, clientIp } from "./utils/rate-limit";
 
 export function createServer(
   config: Config,
@@ -82,10 +55,10 @@ export function createServer(
     next();
   });
 
-  // Rate limiting middleware
+  // Rate limiting middleware — see utils/rate-limit.ts for the keying rules.
+  const rateLimiter = new RateLimiter(config["api-keys"]);
   app.use("/v1", (req, res, next) => {
-    const ip = req.ip || req.socket.remoteAddress || "unknown";
-    if (!rateLimit(ip)) {
+    if (!rateLimiter.allow(req)) {
       res.status(429).json({ error: { message: "Too many requests" } });
       return;
     }
@@ -109,7 +82,7 @@ export function createServer(
     // request even if the downstream handler aborts before filling in the
     // upstream account / model / usage fields.
     if (statsRecorder) {
-      const ip = req.ip || req.socket.remoteAddress || "unknown";
+      const ip = clientIp(req);
       const ua = (req.headers["user-agent"] as string) || "";
       res.locals.stats = {
         apiKeyHash: hashApiKey(key),
@@ -200,12 +173,16 @@ export function createServer(
   //   byAccount — keyed by `${provider}:${email}` (upstream OAuth account)
   //   byApi — keyed by `${endpoint}|${model}|${provider}`
   app.get("/admin/stats", (_req, res) => {
+    // Limiter 429s are rejected before auth, so they never reach the
+    // per-request stats above; report them separately.
+    const rateLimited = rateLimiter.snapshot();
     if (!statsRecorder) {
-      res.json({ enabled: false });
+      res.json({ enabled: false, rateLimited });
       return;
     }
     res.json({
       ...statsRecorder.getSnapshot(),
+      rateLimited,
       generated_at: new Date().toISOString(),
     });
   });
