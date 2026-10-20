@@ -933,3 +933,71 @@ test("drainCodexResponsesSse: surfaces response.failed errors", async () => {
   assert.equal(drained.upstreamError, "boom");
   assert.equal(drained.completedResponse, null);
 });
+
+
+// ───────────── tool calls whose arguments arrive only on the done events ─────────────
+
+function chatArgumentsByIndex(frames: string[]): Record<number, string> {
+  const args: Record<number, string> = {};
+  for (const frame of frames) {
+    if (!frame.startsWith("data: {")) continue;
+    const json = JSON.parse(frame.slice(6));
+    for (const tc of json.choices?.[0]?.delta?.tool_calls ?? []) {
+      args[tc.index] = (args[tc.index] ?? "") + (tc.function?.arguments ?? "");
+    }
+  }
+  return args;
+}
+
+const fnItem = (n: number, args: string) => ({
+  type: "function_call",
+  id: `fc_${n}`,
+  call_id: `call_${n}`,
+  name: "read",
+  arguments: args,
+});
+
+test("responsesSSEToChat: a turn with several calls and no argument deltas still carries each call's arguments", () => {
+  // Real codex shape for a turn with two tool calls: `output_item.added` with
+  // empty arguments, then `function_call_arguments.done` and `output_item.done`
+  // with the complete arguments, and no `.delta` events at all.
+  const state = makeResponsesToChatState("gpt-5.6-luna", true);
+  const events: [string, any][] = [
+    ["response.output_item.added", { item: fnItem(1, "") }],
+    ["response.function_call_arguments.done", { item_id: "fc_1", arguments: '{"path":"/a.txt"}' }],
+    ["response.output_item.done", { item: fnItem(1, '{"path":"/a.txt"}') }],
+    ["response.output_item.added", { item: fnItem(2, "") }],
+    ["response.function_call_arguments.done", { item_id: "fc_2", arguments: '{"path":"/b.txt"}' }],
+    ["response.output_item.done", { item: fnItem(2, '{"path":"/b.txt"}') }],
+    ["response.completed", { response: { status: "completed" } }],
+  ];
+  const frames = events.flatMap(([event, data]) => responsesSSEToChat(event, data, state));
+  assert.deepEqual(chatArgumentsByIndex(frames), { 0: '{"path":"/a.txt"}', 1: '{"path":"/b.txt"}' });
+});
+
+test("responsesSSEToChat: arguments already streamed as deltas are not repeated by the done events", () => {
+  const state = makeResponsesToChatState("gpt-5.6-luna", true);
+  const events: [string, any][] = [
+    ["response.output_item.added", { item: fnItem(1, "") }],
+    ["response.function_call_arguments.delta", { item_id: "fc_1", delta: '{"path":' }],
+    ["response.function_call_arguments.delta", { item_id: "fc_1", delta: '"/a.txt"}' }],
+    ["response.function_call_arguments.done", { item_id: "fc_1", arguments: '{"path":"/a.txt"}' }],
+    ["response.output_item.done", { item: fnItem(1, '{"path":"/a.txt"}') }],
+  ];
+  const frames = events.flatMap(([event, data]) => responsesSSEToChat(event, data, state));
+  assert.deepEqual(chatArgumentsByIndex(frames), { 0: '{"path":"/a.txt"}' });
+});
+
+test("drainCodexResponsesSse: takes a call's arguments from the done events when no delta arrived", async () => {
+  const sse = (event: string, data: unknown) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  const resp = makeStreamingResponse([
+    sse("response.output_item.added", { item: fnItem(1, "") }),
+    sse("response.function_call_arguments.done", { item_id: "fc_1", arguments: '{"path":"/a.txt"}' }),
+    sse("response.output_item.added", { item: fnItem(2, "") }),
+    sse("response.output_item.done", { item: fnItem(2, '{"path":"/b.txt"}') }),
+    sse("response.completed", { response: { status: "completed" } }),
+  ]);
+  const drained = await drainCodexResponsesSse(resp);
+  assert.equal(drained.toolCalls.get("call_1")!.args, '{"path":"/a.txt"}');
+  assert.equal(drained.toolCalls.get("call_2")!.args, '{"path":"/b.txt"}');
+});
