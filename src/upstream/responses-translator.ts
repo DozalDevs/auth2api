@@ -111,6 +111,29 @@ export async function drainCodexResponsesSse(
         // `output` array on the final response (which codex itself
         // leaves empty in `response.completed`).
         if (data.item) outputItems.push(data.item);
+        // A turn with several tool calls can arrive with NO argument deltas at
+        // all: the complete arguments ride only on the done item. Take them
+        // from there when nothing was accumulated.
+        if (data.item?.type === "function_call" && data.item.call_id) {
+          const tc = toolCalls.get(data.item.call_id);
+          if (tc && tc.args === "" && typeof data.item.arguments === "string") {
+            tc.args = data.item.arguments;
+          }
+        }
+        break;
+      }
+      case "response.function_call_arguments.done": {
+        const ref = data.item_id || data.call_id;
+        const callId =
+          ref && toolCalls.has(ref)
+            ? ref
+            : ref
+              ? itemIdToCallId.get(ref)
+              : undefined;
+        const tc = callId ? toolCalls.get(callId) : null;
+        if (tc && tc.args === "" && typeof data.arguments === "string") {
+          tc.args = data.arguments;
+        }
         break;
       }
       case "response.function_call_arguments.delta": {
@@ -590,6 +613,10 @@ export interface ResponsesToChatState {
   // without polluting `toolCallIndices` with duplicates.
   itemIdToCallId: Map<string, string>;
   nextToolIndex: number;
+  // Chat tool_call slots that already received argument text. A call whose
+  // arguments arrive only on the `.done` events (a turn with several calls)
+  // gets them emitted there, once.
+  argsEmitted: Set<number>;
   finishReason: string;
   // When true, emit an OpenAI-style usage chunk (empty `choices`,
   // populated `usage`) just before `data: [DONE]`. Mirrors
@@ -610,6 +637,7 @@ export function makeResponsesToChatState(
     toolCallIndices: new Map(),
     itemIdToCallId: new Map(),
     nextToolIndex: 0,
+    argsEmitted: new Set(),
     finishReason: "stop",
     includeUsage,
   };
@@ -740,6 +768,7 @@ export function responsesSSEToChat(
         : undefined;
       const idx = callId ? state.toolCallIndices.get(callId) : undefined;
       if (idx === undefined || typeof data?.delta !== "string") return [];
+      if (data.delta !== "") state.argsEmitted.add(idx);
       return [
         buildChatChunk(state, {
           tool_calls: [
@@ -748,6 +777,30 @@ export function responsesSSEToChat(
               function: { arguments: data.delta },
             },
           ],
+        }),
+      ];
+    }
+
+    case "response.function_call_arguments.done":
+    case "response.output_item.done": {
+      const isItem = event === "response.output_item.done";
+      if (isItem && data?.item?.type !== "function_call") return [];
+      const ref = isItem
+        ? data.item.call_id || data.item.id
+        : data?.item_id || data?.call_id;
+      const args = isItem ? data.item.arguments : data?.arguments;
+      const callId = ref
+        ? state.toolCallIndices.has(ref)
+          ? ref
+          : state.itemIdToCallId.get(ref)
+        : undefined;
+      const idx = callId ? state.toolCallIndices.get(callId) : undefined;
+      if (idx === undefined || state.argsEmitted.has(idx)) return [];
+      if (typeof args !== "string" || args === "") return [];
+      state.argsEmitted.add(idx);
+      return [
+        buildChatChunk(state, {
+          tool_calls: [{ index: idx, function: { arguments: args } }],
         }),
       ];
     }
