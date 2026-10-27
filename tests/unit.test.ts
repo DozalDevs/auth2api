@@ -387,8 +387,9 @@ test("loadConfig uses defaults when file missing", () => {
   assert.equal(config.port, 8317);
   assert.equal(config["body-limit"], "200mb");
   assert.equal(config.debug, "off");
-  assert.ok(config["api-keys"] instanceof Set);
-  assert.ok(config["api-keys"].size > 0); // auto-generated
+  assert.equal(config["api-keys"].length, 1); // auto-generated admin key
+  assert.equal(config["api-keys"][0].admin, true);
+  assert.deepEqual(config["api-keys"][0].models, ["*"]);
 });
 
 test("loadConfig normalizes debug mode", () => {
@@ -396,7 +397,10 @@ test("loadConfig normalizes debug mode", () => {
     os.tmpdir(),
     `auth2api-debug-test-${Date.now()}.yaml`,
   );
-  fs.writeFileSync(configPath, 'api-keys:\n  - "sk-test"\ndebug: true\n');
+  fs.writeFileSync(
+    configPath,
+    'api-keys:\n  - {name: t, key: "sk-test-0123456789ab", models: ["*"]}\ndebug: true\n',
+  );
   try {
     const config = loadConfig(configPath);
     assert.equal(config.debug, "errors"); // true → "errors"
@@ -1127,7 +1131,7 @@ test("createServer stats endpoint records mounted route prefix", async () => {
       host: "",
       port: 0,
       "auth-dir": tmp,
-      "api-keys": new Set(["sk-test"]),
+      "api-keys": [{ name: "test", key: "sk-test", models: ["*"], admin: true }],
       "body-limit": "1mb",
       cloaking: {},
       timeouts: {
@@ -1167,7 +1171,7 @@ test("createServer stats records client disconnects on close", async () => {
       host: "",
       port: 0,
       "auth-dir": tmp,
-      "api-keys": new Set(["sk-test"]),
+      "api-keys": [{ name: "test", key: "sk-test", models: ["*"], admin: true }],
       "body-limit": "1mb",
       cloaking: {},
       timeouts: {

@@ -1,6 +1,6 @@
 import crypto from "crypto";
 import readline from "readline";
-import { Config, loadConfig, resolveAuthDir } from "./config";
+import { Config, loadConfig, persistApiKeys, resolveAuthDir } from "./config";
 import { ProviderId } from "./auth/types";
 import { generatePKCECodes } from "./auth/pkce";
 import { waitForCallback } from "./auth/callback-server";
@@ -175,7 +175,9 @@ async function startServer(): Promise<void> {
     statsRecorder.start(authDir);
   }
 
-  const app = createServer(config, registry, statsRecorder);
+  const app = createServer(config, registry, statsRecorder, {
+    persistKeys: persistApiKeys(configPath || "config.yaml"),
+  });
   const host = config.host || "127.0.0.1";
   const port = config.port;
 

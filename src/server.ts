@@ -13,13 +13,21 @@ import {
 } from "./handlers/anthropic";
 import { StatsRecorder } from "./stats/recorder";
 import { RateLimiter, clientIp } from "./utils/rate-limit";
+import { KeyStore } from "./keys/store";
+import { registerKeyRoutes, utcDay } from "./keys/routes";
+import { ApiKeyEntry } from "./config";
 
 export function createServer(
   config: Config,
   registry: ProviderRegistry,
   statsRecorder?: StatsRecorder,
+  opts: { persistKeys?: (entries: ApiKeyEntry[]) => void } = {},
 ): express.Application {
   const app = express();
+  const keyStore = new KeyStore(config["api-keys"], {
+    statsEnabled: !!statsRecorder,
+    persist: opts.persistKeys,
+  });
 
   app.use(express.json({ limit: config["body-limit"] }));
 
@@ -56,7 +64,7 @@ export function createServer(
   });
 
   // Rate limiting middleware — see utils/rate-limit.ts for the keying rules.
-  const rateLimiter = new RateLimiter(config["api-keys"]);
+  const rateLimiter = new RateLimiter((key) => keyStore.has(key));
   app.use("/v1", (req, res, next) => {
     if (!rateLimiter.allow(req)) {
       res.status(429).json({ error: { message: "Too many requests" } });
@@ -73,11 +81,16 @@ export function createServer(
       res.status(401).json({ error: { message: "Missing API key" } });
       return;
     }
-    const valid = config["api-keys"].has(key);
-    if (!valid) {
+    const entry = keyStore.authenticate(key);
+    if (!entry) {
       res.status(403).json({ error: { message: "Invalid API key" } });
       return;
     }
+    if (entry.disabled) {
+      res.status(403).json({ error: { message: "API key disabled" } });
+      return;
+    }
+    res.locals.keyEntry = entry;
     // Seed res.locals.stats so the stats-finish middleware can record this
     // request even if the downstream handler aborts before filling in the
     // upstream account / model / usage fields.
@@ -165,8 +178,18 @@ export function createServer(
     res.json({ status: "ok" });
   });
 
+  const requireAdmin: express.RequestHandler = (_req, res, next) => {
+    if (!(res.locals.keyEntry as ApiKeyEntry).admin) {
+      res.status(403).json({ error: { message: "Admin key required" } });
+      return;
+    }
+    next();
+  };
+
   app.use("/admin", requireApiKey);
   app.use("/admin", statsFinishMiddleware);
+  app.use("/admin", requireAdmin);
+  registerKeyRoutes(app, keyStore, statsRecorder);
 
   // GET /admin/stats — three-axis aggregated call statistics.
   //   byClient — keyed by sha256(api-key); show short hex prefix to operator
@@ -226,18 +249,65 @@ export function createServer(
 
   app.use(["/v1", "/codex", "/backend-api/codex"], requireApiKey);
   app.use(["/v1", "/codex", "/backend-api/codex"], statsFinishMiddleware);
+
+  // Per-key policy for calls that consume the subscription: model allowlist
+  // (checked after alias resolution) and the daily token cap. Runs after the
+  // stats middleware so refused calls still show up in usage reports.
+  app.use(["/v1", "/codex", "/backend-api/codex"], (req, res, next) => {
+    if (req.method !== "POST") return next();
+    const entry = res.locals.keyEntry as ApiKeyEntry;
+    const model = req.body?.model;
+    if (!entry.models.includes("*")) {
+      if (typeof model !== "string" || !model) {
+        res.status(400).json({
+          error: {
+            message: "model is required for this key",
+            type: "model_required",
+          },
+        });
+        return;
+      }
+      if (!keyStore.allows(entry, model)) {
+        res.status(403).json({
+          error: {
+            message: `model "${model}" is not enabled for this key`,
+            type: "model_not_allowed",
+          },
+        });
+        return;
+      }
+    }
+    const limit = entry["daily-token-limit"];
+    if (
+      limit !== undefined &&
+      statsRecorder &&
+      statsRecorder.tokensOnDay(hashApiKey(entry.key), utcDay()) >= limit
+    ) {
+      res.status(429).json({
+        error: {
+          message: "daily token limit reached for this key",
+          type: "daily_token_limit",
+        },
+      });
+      return;
+    }
+    next();
+  });
   app.get("/v1/models", async (_req, res) => {
+    const entry = res.locals.keyEntry as ApiKeyEntry;
     const created = Math.floor(Date.now() / 1000);
     const providers = registry.withAccounts();
     const lists = await Promise.all(providers.map((p) => p.listModels()));
-    const data = lists.flatMap((models) =>
-      models.map((m) => ({
-        id: m.id,
-        object: "model",
-        created,
-        owned_by: m.owned_by,
-      })),
-    );
+    const data = lists
+      .flatMap((models) =>
+        models.map((m) => ({
+          id: m.id,
+          object: "model",
+          created,
+          owned_by: m.owned_by,
+        })),
+      )
+      .filter((m) => keyStore.allows(entry, m.id));
     res.json({ object: "list", data });
   });
 

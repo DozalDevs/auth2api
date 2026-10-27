@@ -63,6 +63,19 @@ export interface StatsSnapshot {
   totals: BaseBucket;
 }
 
+export interface UsageRow {
+  apiKeyHash: string;
+  model: string;
+  day: string;
+  requests: number;
+  successes: number;
+  failures: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens: number;
+  reasoningOutputTokens: number;
+}
+
 function emptyBucket(now: string): BaseBucket {
   return {
     requests: 0,
@@ -108,6 +121,7 @@ export class StatsRecorder {
   private byClient = new Map<string, ClientBucket>();
   private byAccount = new Map<string, AccountBucket>();
   private byApi = new Map<string, ApiBucket>();
+  private byKeyModelDay = new Map<string, UsageRow>();
   private totals: BaseBucket = emptyBucket(new Date().toISOString());
 
   private appender: StatsAppender | null = null;
@@ -174,11 +188,30 @@ export class StatsRecorder {
     };
   }
 
+  /** Input + output tokens one key has used on a UTC day (YYYY-MM-DD). */
+  tokensOnDay(apiKeyHash: string, day: string): number {
+    let total = 0;
+    for (const row of this.byKeyModelDay.values()) {
+      if (row.apiKeyHash === apiKeyHash && row.day === day) {
+        total += row.inputTokens + row.outputTokens;
+      }
+    }
+    return total;
+  }
+
+  /** Per key, model and UTC day usage, optionally from `sinceDay` onward. */
+  usageRows(sinceDay?: string): UsageRow[] {
+    return Array.from(this.byKeyModelDay.values())
+      .filter((r) => !sinceDay || r.day >= sinceDay)
+      .map((r) => ({ ...r }));
+  }
+
   /** Reset all in-memory aggregates. Doesn't touch the JSONL on disk. */
   reset(): void {
     this.byClient.clear();
     this.byAccount.clear();
     this.byApi.clear();
+    this.byKeyModelDay.clear();
     this.totals = emptyBucket(new Date().toISOString());
   }
 
@@ -229,6 +262,34 @@ export class StatsRecorder {
       this.byApi.set(apiKey, pb);
     }
     applyBaseDelta(pb, ev);
+
+    const day = ev.ts.slice(0, 10);
+    const usageKey = `${ev.apiKeyHash}|${apiModel}|${day}`;
+    let ur = this.byKeyModelDay.get(usageKey);
+    if (!ur) {
+      ur = {
+        apiKeyHash: ev.apiKeyHash,
+        model: apiModel,
+        day,
+        requests: 0,
+        successes: 0,
+        failures: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadInputTokens: 0,
+        reasoningOutputTokens: 0,
+      };
+      this.byKeyModelDay.set(usageKey, ur);
+    }
+    ur.requests++;
+    if (ev.status === "success") ur.successes++;
+    else ur.failures++;
+    if (ev.usage) {
+      ur.inputTokens += ev.usage.inputTokens;
+      ur.outputTokens += ev.usage.outputTokens;
+      ur.cacheReadInputTokens += ev.usage.cacheReadInputTokens;
+      ur.reasoningOutputTokens += ev.usage.reasoningOutputTokens;
+    }
   }
 }
 

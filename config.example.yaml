@@ -4,9 +4,20 @@ port: 8317
 # Directory to store OAuth tokens
 auth-dir: "~/.auth2api"
 
-# API keys for client authentication (clients use these to access this proxy)
+# Client credentials. One entry per person or service, so usage reports name them.
+#   name:              label used in /admin/usage (letters, digits, . _ -)
+#   key:               the secret clients send (16+ characters)
+#   models:            required allowlist, matched after alias resolution; ["*"] = any model
+#   daily-token-limit: optional cap on input+output tokens per UTC day. Soft: calls already
+#                      in flight can overshoot it. Needs stats.enabled.
+#   disabled:          true refuses the key without deleting it
+#   admin:             true unlocks /admin/* (keys, usage, stats, reload)
+# Admins can also add, change and remove keys at runtime via /admin/keys with no restart.
 api-keys:
-  - "your-api-key-here"
+  - name: admin
+    key: "your-api-key-here-change-me"
+    models: ["*"]
+    admin: true
 
 # Maximum JSON request body size
 body-limit: "200mb"

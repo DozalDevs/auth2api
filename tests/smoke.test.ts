@@ -22,7 +22,7 @@ function makeConfig(authDir: string): Config {
     host: "127.0.0.1",
     port: 0,
     "auth-dir": authDir,
-    "api-keys": new Set(["test-key"]),
+    "api-keys": [{ name: "test", key: "test-key", models: ["*"], admin: true }],
     "body-limit": "200mb",
     cloaking: {
       "cli-version": "2.1.88",
@@ -923,9 +923,9 @@ test("multi-account falls back to next account on rate limit", async (t) => {
   assert.ok(usedTokens.includes("token-b"));
 });
 
-// ── loadConfig: YAML api-keys array → Set ──
+// ── loadConfig: YAML api-keys objects ──
 
-test("loadConfig converts YAML api-keys array to Set", () => {
+test("loadConfig reads named api-keys with allowlists and limits", () => {
   const configPath = path.join(os.tmpdir(), `auth2api-test-${Date.now()}.yaml`);
   fs.writeFileSync(
     configPath,
@@ -934,9 +934,8 @@ test("loadConfig converts YAML api-keys array to Set", () => {
       "port: 9999",
       'auth-dir: "~/.auth2api"',
       "api-keys:",
-      '  - "sk-key-one"',
-      '  - "sk-key-two"',
-      '  - "sk-key-three"',
+      '  - {name: boss, key: "sk-key-one-0123456789", models: ["*"], admin: true}',
+      '  - {name: maria, key: "sk-key-two-0123456789", models: [gpt-6-luna], daily-token-limit: 5000}',
       'body-limit: "100mb"',
       'debug: "off"',
     ].join("\n"),
@@ -944,15 +943,44 @@ test("loadConfig converts YAML api-keys array to Set", () => {
 
   try {
     const config = loadConfig(configPath);
-    assert.ok(config["api-keys"] instanceof Set);
-    assert.equal(config["api-keys"].size, 3);
-    assert.ok(config["api-keys"].has("sk-key-one"));
-    assert.ok(config["api-keys"].has("sk-key-two"));
-    assert.ok(config["api-keys"].has("sk-key-three"));
-    assert.ok(!config["api-keys"].has("sk-missing"));
+    assert.equal(config["api-keys"].length, 2);
+    assert.equal(config["api-keys"][0].admin, true);
+    assert.deepEqual(config["api-keys"][1].models, ["gpt-6-luna"]);
+    assert.equal(config["api-keys"][1]["daily-token-limit"], 5000);
   } finally {
     fs.unlinkSync(configPath);
   }
+});
+
+test("loadConfig rejects plain-string keys, bad entries and duplicates", () => {
+  const load = (lines: string[]) => {
+    const configPath = path.join(
+      os.tmpdir(),
+      `auth2api-bad-${Date.now()}-${Math.random()}.yaml`,
+    );
+    fs.writeFileSync(configPath, ["api-keys:", ...lines].join("\n"));
+    try {
+      return () => loadConfig(configPath);
+    } finally {
+      process.on("exit", () => fs.rmSync(configPath, { force: true }));
+    }
+  };
+  assert.throws(load(['  - "sk-plain-string-key-0123"']), /must be objects/);
+  assert.throws(
+    load(['  - {name: a, key: "sk-short", models: ["*"]}']),
+    /at least 16/,
+  );
+  assert.throws(
+    load(['  - {name: a, key: "sk-0123456789abcdef0"}']),
+    /models must be/,
+  );
+  assert.throws(
+    load([
+      '  - {name: a, key: "sk-0123456789abcdef0", models: ["*"]}',
+      '  - {name: A, key: "sk-0123456789abcdef1", models: ["*"]}',
+    ]),
+    /duplicate name/,
+  );
 });
 
 test("POST /admin/reload reloads token from disk; subsequent request uses new bearer", async (t) => {

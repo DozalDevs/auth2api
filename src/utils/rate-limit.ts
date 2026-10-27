@@ -53,7 +53,7 @@ export class RateLimiter {
   private readonly cleanupTimer: NodeJS.Timeout;
 
   constructor(
-    private readonly validKeys: Set<string>,
+    private readonly isValidKey: (key: string) => boolean,
     private readonly limits: Record<RateLimitScope, number> = {
       api_key: API_KEY_RATE_LIMIT_MAX,
       ip: IP_RATE_LIMIT_MAX,
@@ -69,7 +69,7 @@ export class RateLimiter {
   allow(req: Request): boolean {
     const key = extractApiKey(req.headers);
     const scope: RateLimitScope =
-      key && this.validKeys.has(key) ? "api_key" : "ip";
+      key && this.isValidKey(key) ? "api_key" : "ip";
     const bucketKey =
       scope === "api_key" ? `key:${hashApiKey(key)}` : `ip:${clientIp(req)}`;
 
