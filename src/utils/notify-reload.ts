@@ -33,9 +33,8 @@ export function normalizeNotifyHost(configured: string | undefined): string {
 export async function notifyServerReload(config: Config): Promise<void> {
   const host = normalizeNotifyHost(config.host);
   const port = config.port;
-  // Set preserves insertion order; pick the first configured key.
-  const apiKey = Array.from(config["api-keys"])[0];
-  if (!apiKey) return; // loadConfig always seeds at least one key
+  const apiKey = config["api-keys"].find((k) => k.admin && !k.disabled)?.key;
+  if (!apiKey) return;
   const url = `http://${host}:${port}/admin/reload`;
 
   let resp: Response;

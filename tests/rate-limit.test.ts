@@ -21,7 +21,7 @@ function makeConfig(authDir: string): Config {
     host: "127.0.0.1",
     port: 0,
     "auth-dir": authDir,
-    "api-keys": new Set(["test-key"]),
+    "api-keys": [{ name: "test", key: "test-key", models: ["*"], admin: true }],
     "body-limit": "1mb",
     cloaking: {},
     timeouts: {
@@ -109,7 +109,7 @@ test("unauthenticated requests keep the per-IP limit and are counted in /admin/s
 });
 
 test("an unknown key is limited per IP, so guessing keys can't mint fresh buckets", () => {
-  const limiter = new RateLimiter(new Set(["good"]), { api_key: 5, ip: 2 });
+  const limiter = new RateLimiter((k) => k === "good", { api_key: 5, ip: 2 });
   const results = ["a", "b", "c"].map((k) =>
     limiter.allow(fakeReq({ authorization: `Bearer ${k}` })),
   );
@@ -120,7 +120,7 @@ test("an unknown key is limited per IP, so guessing keys can't mint fresh bucket
 test("the api-key bucket still caps and resets after the window", () => {
   let now = 0;
   const limiter = new RateLimiter(
-    new Set(["good"]),
+    (k) => k === "good",
     { api_key: 3, ip: 1 },
     1000,
     () => now,
@@ -150,7 +150,7 @@ test("clientIp uses Fly-Client-IP only when running on Fly", (t) => {
   assert.equal(clientIp(req), "203.0.113.9");
 
   // Distinct real clients behind one proxy address get distinct IP buckets.
-  const limiter = new RateLimiter(new Set(), { api_key: 1, ip: 1 });
+  const limiter = new RateLimiter(() => false, { api_key: 1, ip: 1 });
   assert.equal(
     limiter.allow(fakeReq({ "fly-client-ip": "203.0.113.1" })),
     true,

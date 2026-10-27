@@ -15,7 +15,7 @@ const config: Config = {
   host: "127.0.0.1",
   port: 0,
   "auth-dir": "/tmp",
-  "api-keys": new Set(["k"]),
+  "api-keys": [{ name: "test", key: "k", models: ["*"], admin: true }],
   "body-limit": "1mb",
   cloaking: { "cli-version": "2.1.88", entrypoint: "cli", codex: {} },
   timeouts: {
