@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import readline from "readline";
+import { hashPassword } from "./auth/password";
 import { Config, loadConfig, persistApiKeys, resolveAuthDir } from "./config";
 import { ProviderId } from "./auth/types";
 import { generatePKCECodes } from "./auth/pkce";
@@ -209,8 +210,21 @@ async function startServer(): Promise<void> {
   });
 }
 
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks).toString("utf-8");
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+
+  if (args.includes("--hash-password")) {
+    const password = (await readStdin()).replace(/\r?\n$/, "");
+    if (!password) throw new Error("pipe the password in on stdin");
+    console.log(await hashPassword(password));
+    return;
+  }
   const configPath = args.find((a) => a.startsWith("--config="))?.split("=")[1];
   const config = loadConfig(configPath);
   const authDir = resolveAuthDir(config["auth-dir"]);

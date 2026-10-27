@@ -38,6 +38,7 @@ header.top .actions { display: flex; align-items: center; gap: 8px; flex-wrap: w
 #status.ok { color: var(--ok); }
 .login { max-width: 420px; margin: 12vh auto 0; }
 .login .panel { padding: 24px; }
+.login h1 { margin-bottom: 16px; }
 .login form > * + * { margin-top: 12px; }
 .krow { display: grid; grid-template-columns: 1.1fr 1.5fr 1.4fr 1fr 232px; gap: 12px; align-items: center; padding: 12px 0; border-top: 1px solid var(--line); }
 .krow.head { border-top: 0; padding-top: 0; color: var(--muted); font-size: 13px; font-weight: 600; }
@@ -99,8 +100,6 @@ h3 { font-size: 14px; margin: 16px 0 4px; color: var(--muted); }
 const JS = String.raw`
 (function () {
   'use strict';
-  var STORE = 'relay-admin-key';
-  var adminKey = sessionStorage.getItem(STORE) || '';
   var state = { keys: [], usage: null, days: 1, editing: null };
 
   function $(id) { return document.getElementById(id); }
@@ -137,7 +136,7 @@ const JS = String.raw`
   }
 
   function api(method, path, body) {
-    var opts = { method: method, headers: { Authorization: 'Bearer ' + adminKey } };
+    var opts = { method: method, headers: { 'X-Relay-Csrf': '1' } };
     if (body !== undefined) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
     return fetch(path, opts).then(function (res) {
       if (res.status === 204) return null;
@@ -158,16 +157,14 @@ const JS = String.raw`
     $('app').hidden = true;
     $('login').hidden = false;
     $('login-error').textContent = message || '';
-    $('admin-key').value = '';
-    $('admin-key').focus();
+    $('password').value = '';
+    $('username').focus();
   }
-  function signOut(message) {
-    sessionStorage.removeItem(STORE);
-    adminKey = '';
-    showLogin(message);
+  function signOut() {
+    api('POST', '/admin/ui/logout').catch(function () {}).then(function () { showLogin(''); });
   }
   function fail(err) {
-    if (err.status === 401 || err.status === 403) { signOut('That key was not accepted as an admin key.'); return; }
+    if (err.status === 401) { showLogin('Your session ended. Sign in again.'); return; }
     say(err.message, 'error');
   }
 
@@ -364,26 +361,28 @@ const JS = String.raw`
     }).catch(function (err) { $('loading').hidden = true; fail(err); }).then(function () { $('refresh').disabled = false; });
   }
 
-  function enter() {
+  function enter(username) {
+    $('password').value = '';
     $('login').hidden = true;
     $('app').hidden = false;
     $('loading').hidden = false;
-    $('host').textContent = location.host;
+    $('host').textContent = 'Signed in as ' + username + ' \u00b7 ' + location.host;
     refresh();
   }
 
   $('login-form').addEventListener('submit', function (ev) {
     ev.preventDefault();
-    var typed = $('admin-key').value.trim();
-    if (!typed) return;
-    adminKey = typed;
+    var username = $('username').value.trim();
+    var password = $('password').value;
+    if (!username || !password) return;
     $('login-error').textContent = '';
     $('connect').disabled = true;
-    api('GET', '/admin/keys').then(function () { sessionStorage.setItem(STORE, adminKey); enter(); })
-      .catch(function (err) { adminKey = ''; $('login-error').textContent = err.status === 401 || err.status === 403 ? 'That key was not accepted as an admin key.' : err.message; })
+    api('POST', '/admin/ui/login', { username: username, password: password })
+      .then(function (res) { enter(res.username); })
+      .catch(function (err) { $('login-error').textContent = err.message; $('password').value = ''; })
       .then(function () { $('connect').disabled = false; });
   });
-  $('signout').addEventListener('click', function () { signOut(''); });
+  $('signout').addEventListener('click', signOut);
   $('refresh').addEventListener('click', function () { refresh(); });
   $('add-key').addEventListener('click', function () { openForm(null); });
   $('f-cancel').addEventListener('click', closeForm);
@@ -397,7 +396,7 @@ const JS = String.raw`
     b.addEventListener('click', function () { setDays(Number(b.getAttribute('data-days'))); });
   });
 
-  if (adminKey) enter(); else showLogin('');
+  api('GET', '/admin/ui/session').then(function (res) { enter(res.username); }).catch(function () { showLogin(''); });
 })();
 `;
 
@@ -406,14 +405,17 @@ const BODY = String.raw`
   <section id="login" class="login" hidden>
     <div class="panel">
       <h1>Relay admin</h1>
-      <form id="login-form" autocomplete="off">
+      <form id="login-form">
         <div>
-          <label for="admin-key">Admin key</label>
-          <input id="admin-key" type="password" autocomplete="off" spellcheck="false" required>
-          <p class="hint">Stays in this browser tab only and is cleared when you close it.</p>
+          <label for="username">Username</label>
+          <input id="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+        </div>
+        <div>
+          <label for="password">Password</label>
+          <input id="password" type="password" autocomplete="current-password" required>
         </div>
         <p id="login-error" class="hint err" role="alert"></p>
-        <button id="connect" class="primary" type="submit">Connect</button>
+        <button id="connect" class="primary" type="submit">Sign in</button>
       </form>
     </div>
   </section>

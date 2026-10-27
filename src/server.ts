@@ -17,6 +17,13 @@ import { KeyStore } from "./keys/store";
 import { registerKeyRoutes, utcDay } from "./keys/routes";
 import { ApiKeyEntry } from "./config";
 import { DASHBOARD_CSP, DASHBOARD_HTML } from "./ui/dashboard";
+import {
+  LoginThrottle,
+  SESSION_COOKIE,
+  SESSION_TTL_MS,
+  SessionStore,
+  checkLogin,
+} from "./auth/dashboard-login";
 
 export function createServer(
   config: Config,
@@ -25,6 +32,8 @@ export function createServer(
   opts: { persistKeys?: (entries: ApiKeyEntry[]) => void } = {},
 ): express.Application {
   const app = express();
+  const sessions = new SessionStore();
+  const loginThrottle = new LoginThrottle();
   const keyStore = new KeyStore(config["api-keys"], {
     statsEnabled: !!statsRecorder,
     persist: opts.persistKeys,
@@ -74,6 +83,29 @@ export function createServer(
     next();
   });
 
+  // Seed res.locals.stats so the stats-finish middleware can record this
+  // request even if the downstream handler aborts before filling in the
+  // upstream account / model / usage fields.
+  const seedStats = (
+    req: express.Request,
+    res: express.Response,
+    secret: string,
+  ) => {
+    if (!statsRecorder) return;
+    res.locals.stats = {
+      apiKeyHash: hashApiKey(secret),
+      ip: clientIp(req),
+      ua: (req.headers["user-agent"] as string) || "",
+      endpoint: `${req.method} ${req.baseUrl}${req.path}`,
+      startedAt: Date.now(),
+      model: null,
+      provider: null,
+      accountEmail: null,
+      usage: null,
+      failureKind: null,
+    };
+  };
+
   // API key auth middleware — accepts both OpenAI style (Authorization: Bearer)
   // and Anthropic style (x-api-key), so Claude Code and OpenAI clients both work
   const requireApiKey: express.RequestHandler = (req, res, next) => {
@@ -92,25 +124,7 @@ export function createServer(
       return;
     }
     res.locals.keyEntry = entry;
-    // Seed res.locals.stats so the stats-finish middleware can record this
-    // request even if the downstream handler aborts before filling in the
-    // upstream account / model / usage fields.
-    if (statsRecorder) {
-      const ip = clientIp(req);
-      const ua = (req.headers["user-agent"] as string) || "";
-      res.locals.stats = {
-        apiKeyHash: hashApiKey(key),
-        ip,
-        ua,
-        endpoint: `${req.method} ${req.baseUrl}${req.path}`,
-        startedAt: Date.now(),
-        model: null,
-        provider: null,
-        accountEmail: null,
-        usage: null,
-        failureKind: null,
-      };
-    }
+    seedStats(req, res, key);
     next();
   };
 
@@ -203,7 +217,94 @@ export function createServer(
     next();
   };
 
-  app.use("/admin", requireApiKey);
+  const sessionToken = (req: express.Request): string | undefined =>
+    new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([a-f0-9]{64})`).exec(
+      req.headers.cookie || "",
+    )?.[1];
+
+  const cookieFlags = (req: express.Request) =>
+    `HttpOnly; SameSite=Strict; Path=/admin${
+      req.secure || req.headers["x-forwarded-proto"] === "https"
+        ? "; Secure"
+        : ""
+    }`;
+
+  app.post("/admin/ui/login", async (req, res) => {
+    const ip = clientIp(req);
+    if (loginThrottle.blocked(ip)) {
+      res.status(429).json({
+        error: {
+          message: "Too many failed attempts. Try again in a few minutes.",
+        },
+      });
+      return;
+    }
+    const username = await checkLogin(
+      config["dashboard-users"] ?? [],
+      req.body?.username,
+      req.body?.password,
+    );
+    if (!username) {
+      loginThrottle.fail(ip);
+      res
+        .status(401)
+        .json({ error: { message: "Wrong username or password." } });
+      return;
+    }
+    loginThrottle.succeed(ip);
+    res.setHeader(
+      "Set-Cookie",
+      `${SESSION_COOKIE}=${sessions.create(username)}; Max-Age=${SESSION_TTL_MS / 1000}; ${cookieFlags(req)}`,
+    );
+    res.json({ username });
+  });
+
+  app.get("/admin/ui/session", (req, res) => {
+    const token = sessionToken(req);
+    const username = token && sessions.get(token);
+    if (!username) {
+      res.status(401).json({ error: { message: "Not signed in" } });
+      return;
+    }
+    res.json({ username });
+  });
+
+  app.post("/admin/ui/logout", (req, res) => {
+    const token = sessionToken(req);
+    if (token) sessions.destroy(token);
+    res.setHeader(
+      "Set-Cookie",
+      `${SESSION_COOKIE}=; Max-Age=0; ${cookieFlags(req)}`,
+    );
+    res.status(204).end();
+  });
+
+  // Admin calls authenticate with an admin API key (scripts, ai-employee) or
+  // with the dashboard's session cookie. A cookie alone can be sent by any
+  // page the browser visits, so cookie calls must also carry a custom header
+  // that cross-site requests cannot add without a CORS preflight.
+  const adminAuth: express.RequestHandler = (req, res, next) => {
+    const token = extractApiKey(req.headers) ? undefined : sessionToken(req);
+    const username = token && sessions.get(token);
+    if (!username) return requireApiKey(req, res, next);
+    if (req.headers["x-relay-csrf"] !== "1") {
+      res
+        .status(403)
+        .json({ error: { message: "Missing x-relay-csrf header" } });
+      return;
+    }
+    const secret = `session:${username}`;
+    res.locals.keyEntry = {
+      name: username,
+      key: secret,
+      models: ["*"],
+      admin: true,
+    };
+    seedStats(req, res, secret);
+    next();
+  };
+
+  app.use("/admin", adminAuth);
   app.use("/admin", statsFinishMiddleware);
   app.use("/admin", requireAdmin);
   registerKeyRoutes(app, keyStore, statsRecorder);

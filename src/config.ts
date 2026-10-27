@@ -2,6 +2,7 @@ import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import yaml from "js-yaml";
+import { PASSWORD_HASH_RE } from "./auth/password";
 
 /**
  * Cloaking configuration for request fingerprinting.
@@ -66,11 +67,17 @@ export interface ApiKeyEntry {
   admin?: boolean;
 }
 
+export interface DashboardUser {
+  username: string;
+  "password-hash": string;
+}
+
 export interface Config {
   host: string;
   port: number;
   "auth-dir": string;
   "api-keys": ApiKeyEntry[];
+  "dashboard-users"?: DashboardUser[];
   "body-limit": string;
   cloaking: CloakingConfig;
   timeouts: TimeoutConfig;
@@ -190,6 +197,32 @@ export function validateApiKeys(list: unknown): ApiKeyEntry[] {
   return entries;
 }
 
+export function validateDashboardUsers(list: unknown): DashboardUser[] {
+  if (list === undefined || list === null) return [];
+  if (!Array.isArray(list)) throw new Error("dashboard-users must be a list");
+  const seen = new Set<string>();
+  return list.map((u, i) => {
+    const o = (u ?? {}) as Record<string, unknown>;
+    const where = `dashboard-users[${i}]`;
+    if (typeof o.username !== "string" || !o.username.trim()) {
+      throw new Error(`${where}: username must be a non-empty string`);
+    }
+    if (
+      typeof o["password-hash"] !== "string" ||
+      !PASSWORD_HASH_RE.test(o["password-hash"])
+    ) {
+      throw new Error(
+        `${where}: password-hash must be a scrypt hash (make one with --hash-password)`,
+      );
+    }
+    const name = o.username.trim().toLowerCase();
+    if (seen.has(name))
+      throw new Error(`dashboard-users: duplicate username "${o.username}"`);
+    seen.add(name);
+    return { username: o.username.trim(), "password-hash": o["password-hash"] };
+  });
+}
+
 export function loadConfig(configPath?: string): Config {
   const filePath = configPath || "config.yaml";
   let raw: Config;
@@ -222,6 +255,7 @@ export function loadConfig(configPath?: string): Config {
   }
 
   raw["api-keys"] = validateApiKeys(raw["api-keys"]);
+  raw["dashboard-users"] = validateDashboardUsers(raw["dashboard-users"]);
   if (
     !raw.stats.enabled &&
     raw["api-keys"].some((k) => k["daily-token-limit"] !== undefined)
