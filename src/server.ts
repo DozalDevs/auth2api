@@ -16,6 +16,7 @@ import { RateLimiter, clientIp } from "./utils/rate-limit";
 import { KeyStore } from "./keys/store";
 import { registerKeyRoutes, utcDay } from "./keys/routes";
 import { ApiKeyEntry } from "./config";
+import { DASHBOARD_CSP, DASHBOARD_HTML } from "./ui/dashboard";
 
 export function createServer(
   config: Config,
@@ -176,6 +177,22 @@ export function createServer(
   // Health check (no account count to avoid info leak)
   app.get("/health", (_req, res) => {
     res.json({ status: "ok" });
+  });
+
+  // The page itself holds no secrets and is public; every action it takes
+  // goes through the admin-key-gated API below. The CSP only lets its own
+  // script and stylesheet run.
+  app.get("/admin/ui", (_req, res) => {
+    res
+      .set({
+        "Content-Security-Policy": DASHBOARD_CSP,
+        "Cache-Control": "no-store",
+        "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+      })
+      .type("html")
+      .send(DASHBOARD_HTML);
   });
 
   const requireAdmin: express.RequestHandler = (_req, res, next) => {
