@@ -24,6 +24,9 @@ PROVIDER_NAME="DozalDevs ChatGPT Relay"
 # Every model we know the relay can serve, cheapest first. We ask the relay which of these your key may use.
 CANDIDATES="gpt-6-luna gpt-5.6-luna gpt-6-sol gpt-5.6-sol gpt-6.1-sol gpt-6.1-terra gpt-6-astra"
 
+RELEASE_DATE="${RELAY_RELEASE_DATE:-$(date -u +%Y-%m-%d)}"
+STALE_DAYS=150
+
 CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json"
 KEY_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/opencode/dozaldevs-relay.key"
 STAMP="$(date +%Y%m%d-%H%M%S)"
@@ -109,14 +112,26 @@ function run(argv) {
     loadObject(argv[1]);
     return 'ok';
   }
+  if (op === 'age') {
+    var found = loadObject(argv[1]).obj, rec = found.providers && found.providers[argv[2]];
+    var first = rec && rec.models && Object.keys(rec.models).map(function (k) { return rec.models[k].releaseDate; }).filter(Boolean)[0];
+    if (!first) return 'none';
+    return String(Math.floor((Date.parse(argv[3]) - Date.parse(first)) / 86400000));
+  }
   if (op === 'config') {
-    var path = argv[1], id = argv[2], baseURL = argv[3], name = argv[4], allowed = argv[5].split(' '), backup = argv[6], keyFile = argv[7];
+    var path = argv[1], id = argv[2], baseURL = argv[3], name = argv[4], allowed = argv[5].split(' '), backup = argv[6], keyFile = argv[7], releaseDate = argv[8];
     var loaded = loadObject(path);
     var cfg = loaded.obj;
     var models = {};
     allowed.forEach(function (m) { models[m] = { name: prettyName(m) }; });
     if (!cfg.provider || typeof cfg.provider !== 'object') cfg.provider = {};
     cfg.provider[id] = { npm: '@ai-sdk/openai-compatible', name: name, options: { baseURL: baseURL, apiKey: '{file:' + keyFile + '}' }, models: models };
+    // OpenCode 2.x only lists a model in its picker when it looks recent and is the newest of its family,
+    // so give each model a current release date and a family of its own.
+    var pm = {};
+    allowed.forEach(function (m) { pm[m] = { name: prettyName(m), family: m, releaseDate: releaseDate }; });
+    if (!cfg.providers || typeof cfg.providers !== 'object' || Array.isArray(cfg.providers)) cfg.providers = {};
+    cfg.providers[id] = { models: pm };
     var notes = [];
     var current = typeof cfg.model === 'string' ? cfg.model : '';
     var ours = current.indexOf(id + '/') === 0;
@@ -183,8 +198,18 @@ op = a[0]
 if op == 'check':
     load(a[1])
     print('ok')
+elif op == 'age':
+    import datetime
+    cfg = load(a[1])[1]
+    rec = (cfg.get('providers') or {}).get(a[2]) if isinstance(cfg.get('providers'), dict) else None
+    dates = [m.get('releaseDate') for m in ((rec or {}).get('models') or {}).values() if isinstance(m, dict) and m.get('releaseDate')]
+    if not dates:
+        print('none')
+    else:
+        d = lambda t: datetime.date.fromisoformat(t[:10])
+        print((d(a[3]) - d(dates[0])).days)
 elif op == 'config':
-    path, pid, base, name, allowed, backup, key_file = a[1], a[2], a[3], a[4], a[5].split(' '), a[6], a[7]
+    path, pid, base, name, allowed, backup, key_file, release_date = a[1], a[2], a[3], a[4], a[5].split(' '), a[6], a[7], a[8]
     raw, cfg = load(path)
     models = {m: {'name': pretty_name(m)} for m in allowed}
     if not isinstance(cfg.get('provider'), dict):
@@ -195,6 +220,9 @@ elif op == 'config':
         'options': {'baseURL': base, 'apiKey': '{file:' + key_file + '}'},
         'models': models,
     }
+    if not isinstance(cfg.get('providers'), dict):
+        cfg['providers'] = {}
+    cfg['providers'][pid] = {'models': {m: {'name': pretty_name(m), 'family': m, 'releaseDate': release_date} for m in allowed}}
     notes = []
     current = cfg['model'] if isinstance(cfg.get('model'), str) else ''
     ours = current.startswith(pid + '/')
@@ -305,6 +333,15 @@ if [ "$CHECK" = 1 ]; then
   grep -q "\"$PROVIDER_ID\"" "$CONFIG_FILE" || die "OpenCode is not set up for the relay yet. Run the setup first (without --check)."
   grep -qF "{file:$KEY_FILE}" "$CONFIG_FILE" || die "OpenCode's settings do not point at your saved key. Run the setup again (without --check)."
   ok "OpenCode's settings point at your saved key."
+  age="$(run_editor age "$CONFIG_FILE" "$PROVIDER_ID" "$RELEASE_DATE")"
+  case "$age" in
+    none) die "OpenCode's model menu entries are out of date. Run the setup again (without --check)." ;;
+    *[!0-9-]*) die "could not read the model menu dates in $CONFIG_FILE." ;;
+  esac
+  if [ "$age" -gt "$STALE_DAYS" ]; then
+    die "the relay's models will drop out of OpenCode's model menu soon (set up $age days ago). Run the setup again (without --check) to refresh them."
+  fi
+  ok "The relay's models are set to show in OpenCode's model menu."
   say ""
   say "Check passed. Models you can use: $ALLOWED"
   exit 0
@@ -320,7 +357,7 @@ else
 fi
 chmod 600 "$KEY_FILE"
 
-config_result="$(run_editor config "$CONFIG_FILE" "$PROVIDER_ID" "$RELAY_URL/v1" "$PROVIDER_NAME" "$ALLOWED" "$CONFIG_FILE.bak-$STAMP" "$KEY_FILE")"
+config_result="$(run_editor config "$CONFIG_FILE" "$PROVIDER_ID" "$RELAY_URL/v1" "$PROVIDER_NAME" "$ALLOWED" "$CONFIG_FILE.bak-$STAMP" "$KEY_FILE" "$RELEASE_DATE")"
 
 ok "OpenCode settings: ${config_result%% *} ($CONFIG_FILE)"
 ok "Your key: $key_result (private file $KEY_FILE)"
