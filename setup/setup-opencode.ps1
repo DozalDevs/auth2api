@@ -125,7 +125,7 @@ function Update-Config([string[]]$Allowed) {
     foreach ($m in $Allowed) { Add-Member -InputObject $pm -NotePropertyName $m -NotePropertyValue ([pscustomobject][ordered]@{ name = (Get-PrettyName $m); family = $m; releaseDate = $ReleaseDate }) }
     $existingProviders = $cfg.PSObject.Properties.Match('providers')
     if ($existingProviders.Count -eq 0 -or $existingProviders[0].Value -isnot [System.Management.Automation.PSCustomObject]) { Set-Prop $cfg 'providers' (New-Object psobject) }
-    Set-Prop $cfg.providers $ProviderId ([pscustomobject]@{ models = $pm })
+    Set-Prop $cfg.providers $ProviderId ([pscustomobject][ordered]@{ name = $ProviderName; package = '@opencode/ai/providers/openai-compatible'; settings = ([pscustomobject][ordered]@{ baseURL = "$RelayUrl/v1"; apiKey = "{file:$KeyFileForJson}" }); models = $pm })
 
     $notes = @()
     $current = ''

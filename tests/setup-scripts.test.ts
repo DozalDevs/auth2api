@@ -347,6 +347,20 @@ for (const r of runners) {
     const ids = Object.keys(cfg.provider["dozaldevs-relay"].models);
     const entry = cfg.providers["dozaldevs-relay"].models;
     assert.deepEqual(Object.keys(entry), ids);
+    const block = cfg.providers["dozaldevs-relay"];
+    assert.equal(
+      block.package,
+      "@opencode/ai/providers/openai-compatible",
+      "2.x needs the connection in this block",
+    );
+    assert.equal(block.name, "DozalDevs ChatGPT Relay");
+    assert.equal(block.settings.baseURL, `${relay.url}/v1`);
+    assert.equal(block.settings.apiKey, expectedKeyRef(sb));
+    assert.equal(
+      block.settings.apiKey,
+      cfg.provider["dozaldevs-relay"].options.apiKey,
+      "both blocks use the same key file",
+    );
     for (const id of ids) {
       assert.equal(entry[id].releaseDate, TEST_DATE, id);
       assert.equal(entry[id].family, id, "each model is its own family");
@@ -528,6 +542,7 @@ if (runners.length > 1) {
       assert.equal((await run(r, sb, relay.url, KEYS.wide)).code, 0);
       const cfg = readJson(sb.configFile);
       cfg.provider["dozaldevs-relay"].options.apiKey = "<key file>";
+      cfg.providers["dozaldevs-relay"].settings.apiKey = "<key file>";
       results.push(JSON.stringify(cfg));
     }
     for (const x of results) assert.equal(x, results[0]);

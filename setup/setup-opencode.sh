@@ -127,11 +127,12 @@ function run(argv) {
     if (!cfg.provider || typeof cfg.provider !== 'object') cfg.provider = {};
     cfg.provider[id] = { npm: '@ai-sdk/openai-compatible', name: name, options: { baseURL: baseURL, apiKey: '{file:' + keyFile + '}' }, models: models };
     // OpenCode 2.x only lists a model in its picker when it looks recent and is the newest of its family,
-    // so give each model a current release date and a family of its own.
+    // so give each model a current release date and a family of its own. This block replaces the 2.x view of
+    // the provider, so it has to carry the connection too, not just the models.
     var pm = {};
     allowed.forEach(function (m) { pm[m] = { name: prettyName(m), family: m, releaseDate: releaseDate }; });
     if (!cfg.providers || typeof cfg.providers !== 'object' || Array.isArray(cfg.providers)) cfg.providers = {};
-    cfg.providers[id] = { models: pm };
+    cfg.providers[id] = { name: name, package: '@opencode/ai/providers/openai-compatible', settings: { baseURL: baseURL, apiKey: '{file:' + keyFile + '}' }, models: pm };
     var notes = [];
     var current = typeof cfg.model === 'string' ? cfg.model : '';
     var ours = current.indexOf(id + '/') === 0;
@@ -222,7 +223,7 @@ elif op == 'config':
     }
     if not isinstance(cfg.get('providers'), dict):
         cfg['providers'] = {}
-    cfg['providers'][pid] = {'models': {m: {'name': pretty_name(m), 'family': m, 'releaseDate': release_date} for m in allowed}}
+    cfg['providers'][pid] = {'name': name, 'package': '@opencode/ai/providers/openai-compatible', 'settings': {'baseURL': base, 'apiKey': '{file:' + key_file + '}'}, 'models': {m: {'name': pretty_name(m), 'family': m, 'releaseDate': release_date} for m in allowed}}
     notes = []
     current = cfg['model'] if isinstance(cfg.get('model'), str) else ''
     ours = current.startswith(pid + '/')

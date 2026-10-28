@@ -120,3 +120,77 @@ test(
     assert.ok(chat.length > 0, "the relay saw OpenCode's request");
   },
 );
+
+test(
+  "the OpenCode 2.x engine (desktop app) answers through a relay the setup script configured, and lists every model",
+  { skip: !process.env.E2E_OPENCODE_V2, timeout: 600_000 },
+  async (t) => {
+    const engine = process.env.E2E_OPENCODE_V2 as string;
+    const relay = await startMockRelay();
+    t.after(() => relay.close());
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "e2e-v2-"));
+    const work = path.join(root, "work");
+    fs.mkdirSync(work);
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      XDG_CONFIG_HOME: path.join(root, "config"),
+      XDG_DATA_HOME: path.join(root, "data"),
+      XDG_STATE_HOME: path.join(root, "state"),
+      XDG_CACHE_HOME: path.join(root, "cache"),
+      RELAY_URL: relay.url,
+      RELAY_API_KEY: KEYS.wide,
+    };
+    const setup = await exec(
+      "/bin/bash",
+      [path.join(SETUP_DIR, "setup-opencode.sh")],
+      env,
+      work,
+    );
+    assert.equal(setup.code, 0, setup.out);
+
+    const models = await exec(
+      engine,
+      ["api", "--standalone", "GET", "/api/model"],
+      env,
+      work,
+    );
+    const parsed = JSON.parse(models.out.trim());
+    const mine = (parsed.data as any[]).filter(
+      (m) => m.providerID === "dozaldevs-relay",
+    );
+    assert.deepEqual(mine.map((m: any) => m.modelID).sort(), [
+      "gpt-5.6-luna",
+      "gpt-5.6-sol",
+      "gpt-6-astra",
+      "gpt-6-luna",
+      "gpt-6-sol",
+    ]);
+    for (const m of mine) {
+      assert.ok(
+        Math.abs(Date.now() - m.time.released) < 6 * 30.436875 * 86_400_000,
+        `${m.modelID} looks recent to the app`,
+      );
+      assert.equal(m.family, m.modelID, "each model is its own family");
+    }
+
+    const run = await exec(
+      engine,
+      [
+        "run",
+        "--standalone",
+        "-m",
+        "dozaldevs-relay/gpt-6-luna",
+        "Reply with exactly: relay works",
+      ],
+      env,
+      work,
+    );
+    assert.match(run.out, /relay works/, run.out);
+    assert.ok(
+      relay.calls.some(
+        (c) => c.path === "/v1/chat/completions" && c.model === "gpt-6-luna",
+      ),
+      "the relay saw the 2.x engine's request",
+    );
+  },
+);
