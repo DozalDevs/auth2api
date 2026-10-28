@@ -1,7 +1,10 @@
+import crypto from "crypto";
 import {
   ApiKeyEntry,
   KEY_NAME_RE,
+  KeyGrant,
   generateApiKey,
+  isValidModelId,
   validateApiKeyEntry,
 } from "../config";
 import { resolveModel } from "../upstream/translator";
@@ -27,6 +30,19 @@ export interface KeyStoreOptions {
   statsEnabled: boolean;
   /** Writes the full key list to disk; throwing aborts the change. */
   persist?: (entries: ApiKeyEntry[]) => void;
+  /** Clock in ms since the epoch; tests replace it. */
+  now?: () => number;
+}
+
+export const MIN_GRANT_MINUTES = 1;
+export const MAX_GRANT_MINUTES = 7 * 24 * 60;
+/** How long an ended grant is remembered, so errors can say it just ended. */
+export const EXPIRED_GRANT_KEEP_MS = 24 * 60 * 60 * 1000;
+
+export interface GrantInput {
+  models: string[];
+  minutes: number;
+  note?: string;
 }
 
 /**
@@ -61,11 +77,133 @@ export class KeyStore {
     return this.entries.slice();
   }
 
-  /** Whether `entry` may call `model` (alias-resolved on both sides). */
-  allows(entry: ApiKeyEntry, model: string): boolean {
+  now(): number {
+    return this.opts.now ? this.opts.now() : Date.now();
+  }
+
+  /** Grants that are still in force, soonest to end first. */
+  activeGrants(entry: ApiKeyEntry, at = this.now()): KeyGrant[] {
+    return (entry.grants ?? [])
+      .filter((g) => Date.parse(g.until) > at)
+      .sort((a, b) => Date.parse(a.until) - Date.parse(b.until));
+  }
+
+  /** Grants that ended in the last day, newest first. */
+  endedGrants(entry: ApiKeyEntry, at = this.now()): KeyGrant[] {
+    return (entry.grants ?? [])
+      .filter((g) => {
+        const end = Date.parse(g.until);
+        return end <= at && at - end <= EXPIRED_GRANT_KEEP_MS;
+      })
+      .sort((a, b) => Date.parse(b.until) - Date.parse(a.until));
+  }
+
+  /** The most recent just-ended grant that covered `model`, if any. */
+  endedGrantFor(
+    entry: ApiKeyEntry,
+    model: string,
+    at = this.now(),
+  ): KeyGrant | undefined {
+    const want = resolveModel(model);
+    return this.endedGrants(entry, at).find((g) =>
+      g.models.some((m) => resolveModel(m) === want),
+    );
+  }
+
+  /** Whether `entry` may call `model` now (alias-resolved on both sides). */
+  allows(entry: ApiKeyEntry, model: string, at = this.now()): boolean {
     if (entry.models.includes("*")) return true;
     const want = resolveModel(model);
-    return entry.models.some((m) => resolveModel(m) === want);
+    const covers = (m: string) => resolveModel(m) === want;
+    return (
+      entry.models.some(covers) ||
+      this.activeGrants(entry, at).some((g) => g.models.some(covers))
+    );
+  }
+
+  /** Every model id the key may call now, without the "*" wildcard. */
+  allowedIds(entry: ApiKeyEntry, at = this.now()): string[] {
+    const ids = new Set(entry.models.filter((m) => m !== "*"));
+    for (const g of this.activeGrants(entry, at))
+      g.models.forEach((m) => ids.add(m));
+    return [...ids];
+  }
+
+  grant(
+    name: string,
+    input: GrantInput,
+    by: string,
+  ): { entry: ApiKeyEntry; grant: KeyGrant } {
+    const current = this.find(name);
+    if (!current) throw new KeyStoreError(404, `no key named "${name}"`);
+    const { models, minutes } = input;
+    if (
+      !Array.isArray(models) ||
+      models.length === 0 ||
+      models.length > 50 ||
+      !models.every(isValidModelId)
+    ) {
+      throw new KeyStoreError(
+        400,
+        'models must be a list of 1 to 50 model names (the "*" wildcard is not allowed in a grant)',
+      );
+    }
+    if (
+      typeof minutes !== "number" ||
+      !Number.isInteger(minutes) ||
+      minutes < MIN_GRANT_MINUTES ||
+      minutes > MAX_GRANT_MINUTES
+    ) {
+      throw new KeyStoreError(
+        400,
+        `duration must be a whole number of minutes from ${MIN_GRANT_MINUTES} to ${MAX_GRANT_MINUTES} (7 days)`,
+      );
+    }
+    if (
+      input.note !== undefined &&
+      (typeof input.note !== "string" || input.note.length > 200)
+    ) {
+      throw new KeyStoreError(
+        400,
+        "note must be text of at most 200 characters",
+      );
+    }
+    const at = this.now();
+    const grant: KeyGrant = {
+      id: crypto.randomBytes(4).toString("hex"),
+      models: [...new Set(models)],
+      until: new Date(at + minutes * 60_000).toISOString(),
+      "granted-at": new Date(at).toISOString(),
+    };
+    if (input.note?.trim()) grant.note = input.note.trim();
+    const entry = this.validated({
+      ...current,
+      grants: [...(current.grants ?? []), grant],
+    });
+    this.commit(this.entries.map((e) => (e === current ? entry : e)));
+    console.log(
+      `[grant] ${by} gave "${entry.name}" ${grant.models.join(", ")} until ${grant.until}${grant.note ? ` (${grant.note})` : ""}`,
+    );
+    return { entry, grant };
+  }
+
+  revokeGrant(name: string, grantId: string, by: string): ApiKeyEntry {
+    const current = this.find(name);
+    if (!current) throw new KeyStoreError(404, `no key named "${name}"`);
+    const grants = current.grants ?? [];
+    const target = grants.find((g) => g.id === grantId);
+    if (!target)
+      throw new KeyStoreError(404, `no grant "${grantId}" on "${name}"`);
+    const rest = grants.filter((g) => g !== target);
+    const next: Record<string, unknown> = { ...current };
+    if (rest.length) next.grants = rest;
+    else delete next.grants;
+    const entry = this.validated(next);
+    this.commit(this.entries.map((e) => (e === current ? entry : e)));
+    console.log(
+      `[grant] ${by} revoked ${target.models.join(", ")} from "${entry.name}"`,
+    );
+    return entry;
   }
 
   create(input: {
@@ -127,7 +265,22 @@ export class KeyStore {
   }
 
   /** Persist first, then swap, so a failed write leaves the live set intact. */
-  private commit(next: ApiKeyEntry[]): void {
+  private withoutOldGrants(entries: ApiKeyEntry[]): ApiKeyEntry[] {
+    const at = this.now();
+    return entries.map((e) => {
+      const kept = (e.grants ?? []).filter(
+        (g) => at - Date.parse(g.until) <= EXPIRED_GRANT_KEEP_MS,
+      );
+      if (kept.length === (e.grants ?? []).length) return e;
+      const copy: ApiKeyEntry = { ...e };
+      if (kept.length) copy.grants = kept;
+      else delete copy.grants;
+      return copy;
+    });
+  }
+
+  private commit(proposed: ApiKeyEntry[]): void {
+    const next = this.withoutOldGrants(proposed);
     if (!next.some((e) => e.admin && !e.disabled)) {
       throw new KeyStoreError(
         409,

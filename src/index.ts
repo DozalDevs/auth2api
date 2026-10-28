@@ -1,7 +1,13 @@
 import crypto from "crypto";
 import readline from "readline";
 import { hashPassword } from "./auth/password";
-import { Config, loadConfig, persistApiKeys, resolveAuthDir } from "./config";
+import {
+  Config,
+  loadConfig,
+  persistApiKeys,
+  persistCatalog,
+  resolveAuthDir,
+} from "./config";
 import { ProviderId } from "./auth/types";
 import { generatePKCECodes } from "./auth/pkce";
 import { waitForCallback } from "./auth/callback-server";
@@ -178,6 +184,7 @@ async function startServer(): Promise<void> {
 
   const app = createServer(config, registry, statsRecorder, {
     persistKeys: persistApiKeys(configPath || "config.yaml"),
+    persistCatalog: persistCatalog(configPath || "config.yaml"),
   });
   const host = config.host || "127.0.0.1";
   const port = config.port;
