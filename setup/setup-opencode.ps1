@@ -1,5 +1,5 @@
 # Connects OpenCode (the desktop app and the command line tool) on this Windows computer to the
-# DozalDevs ChatGPT relay, using the personal API key you were given.
+# DozalDevs AI relay, using the personal API key you were given.
 #
 # Run it:       paste the one-line command you were given into PowerShell
 # Check later:  the same command with -Check on the end (changes nothing; proves your key and models work)
@@ -20,7 +20,7 @@ if ($RelayUrlDefault.StartsWith('__')) { $RelayUrlDefault = 'https://dozaldevs-c
 $RelayUrl = if ($env:RELAY_URL) { $env:RELAY_URL } else { $RelayUrlDefault }
 $RelayUrl = $RelayUrl.TrimEnd('/')
 $ProviderId = 'dozaldevs-relay'
-$ProviderName = 'DozalDevs ChatGPT Relay'
+$ProviderName = 'DozalDevs AI Relay'
 $Candidates = @('gpt-6-luna', 'gpt-5.6-luna', 'gpt-6-sol', 'gpt-5.6-sol', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-astra')
 
 $ConfigHome = if ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { Join-Path $HOME '.config' }
@@ -106,11 +106,11 @@ function Save-JsonFile([string]$Path, $Loaded, [string]$Backup, $Object) {
     return 'updated'
 }
 
-function Update-Config([string[]]$Allowed) {
+function Update-Config([string[]]$Allowed, [string[]]$Usable, [hashtable]$Names) {
     $loaded = Read-JsonFile $ConfigFile
     $cfg = $loaded.Obj
     $models = New-Object psobject
-    foreach ($m in $Allowed) { Add-Member -InputObject $models -NotePropertyName $m -NotePropertyValue ([pscustomobject]@{ name = (Get-PrettyName $m) }) }
+    foreach ($m in $Allowed) { $label = if ($Names.ContainsKey($m)) { $Names[$m] } else { Get-PrettyName $m }; Add-Member -InputObject $models -NotePropertyName $m -NotePropertyValue ([pscustomobject]@{ name = $label }) }
     $provider = [pscustomobject][ordered]@{
         npm     = '@ai-sdk/openai-compatible'
         name    = $ProviderName
@@ -122,7 +122,7 @@ function Update-Config([string[]]$Allowed) {
     Set-Prop $cfg.provider $ProviderId $provider
 
     $pm = New-Object psobject
-    foreach ($m in $Allowed) { Add-Member -InputObject $pm -NotePropertyName $m -NotePropertyValue ([pscustomobject][ordered]@{ name = (Get-PrettyName $m); family = $m; releaseDate = $ReleaseDate }) }
+    foreach ($m in $Allowed) { $label = if ($Names.ContainsKey($m)) { $Names[$m] } else { Get-PrettyName $m }; Add-Member -InputObject $pm -NotePropertyName $m -NotePropertyValue ([pscustomobject][ordered]@{ name = $label; family = $m; releaseDate = $ReleaseDate }) }
     $existingProviders = $cfg.PSObject.Properties.Match('providers')
     if ($existingProviders.Count -eq 0 -or $existingProviders[0].Value -isnot [System.Management.Automation.PSCustomObject]) { Set-Prop $cfg 'providers' (New-Object psobject) }
     Set-Prop $cfg.providers $ProviderId ([pscustomobject][ordered]@{ name = $ProviderName; package = '@opencode/ai/providers/openai-compatible'; settings = ([pscustomobject][ordered]@{ baseURL = "$RelayUrl/v1"; apiKey = "{file:$KeyFileForJson}" }); models = $pm })
@@ -132,7 +132,7 @@ function Update-Config([string[]]$Allowed) {
     $m0 = $cfg.PSObject.Properties.Match('model')
     if ($m0.Count -gt 0 -and $m0[0].Value -is [string]) { $current = $m0[0].Value }
     $ours = $current.StartsWith("$ProviderId/")
-    if ($current -eq '' -or ($ours -and ($Allowed -notcontains $current.Substring($ProviderId.Length + 1)))) { Set-Prop $cfg 'model' "$ProviderId/$($Allowed[0])" }
+    if ($current -eq '' -or ($ours -and ($Usable -notcontains $current.Substring($ProviderId.Length + 1)))) { Set-Prop $cfg 'model' "$ProviderId/$($Usable[0])" }
     elseif (-not $ours) { $notes += 'kept-model' }
 
     $ep = $cfg.PSObject.Properties.Match('enabled_providers')
@@ -182,19 +182,34 @@ function Main {
     }
 
     # ---- 4. Find out which models this key may use ----
-    Say 'Finding the models your key can use (this takes a few seconds)...'
+    # The relay knows: it lists what this key can use now, then models that need a request, marked as such.
+    Say 'Finding the models your key can use...'
     $allowed = @()
-    foreach ($model in $Candidates) {
-        $payload = '{"model":"' + $model + '","messages":[{"role":"user","content":"Reply with exactly: ok"}]}'
-        $r = Invoke-Relay 'POST' '/v1/chat/completions' $payload
-        if ($r.Status -eq 200) { $allowed += $model; Ok $model }
-        elseif ($r.Status -eq 429) { $allowed += $model; Warn "${model}: your daily limit is used up for today; it will work again after midnight UTC." }
-        elseif ($r.Status -eq 403) {
-            if ($r.Body -like '*model_not_allowed*') { Say "     ${model}: not enabled for your key (skipped)" }
-            else { Die "the relay rejected your key ($(Get-RelayMessage $r.Body))." }
+    $listed = @()
+    $names = @{}
+    $r = Invoke-Relay 'GET' '/setup/models' ''
+    if ($r.Status -eq 200) {
+        foreach ($line in ($r.Body -split "`n")) {
+            $parts = $line.TrimEnd("`r").Split("`t", 3)
+            if ($parts.Length -lt 3 -or -not $parts[0]) { continue }
+            $names[$parts[0]] = $parts[2]
+            if ($parts[1] -eq 'allowed') { $allowed += $parts[0]; $listed += $parts[0]; Ok $parts[0] }
+            elseif ($parts[1] -eq 'on_request') { $listed += $parts[0]; Say "     $($parts[0]): on request (ask the engineering team for temporary access)" }
         }
-        elseif ($r.Status -eq 0) { Die 'lost the connection to the relay while testing models. Try again.' }
-        else { Say "     ${model}: not available right now (skipped)" }
+    }
+    else {
+        # An older relay without /setup/models: find the usable models by trying each one.
+        if ($r.Status -eq 0) { Die 'lost the connection to the relay while listing models. Try again.' }
+        if ($r.Status -in 401, 403) { Die "the relay rejected your key ($(Get-RelayMessage $r.Body))." }
+        foreach ($model in $Candidates) {
+            $payload = '{"model":"' + $model + '","messages":[{"role":"user","content":"Reply with exactly: ok"}]}'
+            $r = Invoke-Relay 'POST' '/v1/chat/completions' $payload
+            if ($r.Status -eq 200) { $allowed += $model; $listed += $model; Ok $model }
+            elseif ($r.Status -eq 429) { $allowed += $model; $listed += $model; Warn "${model}: your daily limit is used up for today; it will work again after midnight UTC." }
+            elseif ($r.Status -eq 403) { Say "     ${model}: not enabled for your key (skipped)" }
+            elseif ($r.Status -eq 0) { Die 'lost the connection to the relay while testing models. Try again.' }
+            else { Say "     ${model}: not available right now (skipped)" }
+        }
     }
     if ($allowed.Count -eq 0) { Die 'your key is not allowed to use any model yet. Ask the engineering team to enable one.' }
     $allowedText = $allowed -join ' '
@@ -233,7 +248,7 @@ function Main {
         else { $null = & chmod 600 $KeyFile 2>&1 }
     } catch {}
 
-    $configResult = Update-Config $allowed
+    $configResult = Update-Config $listed $allowed $names
     Ok "OpenCode settings: $($configResult.Split(' ')[0]) ($ConfigFile)"
     Ok "Your key: $keyResult (private file $KeyFile)"
     if ($configResult -like '*kept-model*') { Say "     Your existing default model was left as it was; pick the relay's models from the model menu." }
@@ -241,6 +256,8 @@ function Main {
     # ---- 6. Tell them what to do next ----
     Say ''
     Say "All set. Models you can use: $allowedText"
+    $onRequest = @($listed | Where-Object { $allowed -notcontains $_ })
+    if ($onRequest.Count -gt 0) { Say ('Listed as "on request" (ask the engineering team for temporary access): ' + ($onRequest -join ' ')) }
     Say "Default model: $ProviderId/$($allowed[0])"
     Say ''
     $running = $false

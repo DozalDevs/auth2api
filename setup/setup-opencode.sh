@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Connects OpenCode (the desktop app and the command line tool) on this Mac or Linux computer to the
-# DozalDevs ChatGPT relay, using the personal API key you were given.
+# DozalDevs AI relay, using the personal API key you were given.
 #
 # Run it:       bash setup-opencode.sh
 # Check later:  bash setup-opencode.sh --check     (changes nothing; proves your key and models work)
@@ -20,7 +20,7 @@ case "$RELAY_URL_DEFAULT" in __*) RELAY_URL_DEFAULT="https://dozaldevs-codex-rel
 RELAY_URL="${RELAY_URL:-$RELAY_URL_DEFAULT}"
 RELAY_URL="${RELAY_URL%/}"
 PROVIDER_ID="dozaldevs-relay"
-PROVIDER_NAME="DozalDevs ChatGPT Relay"
+PROVIDER_NAME="DozalDevs AI Relay"
 # Every model we know the relay can serve, cheapest first. We ask the relay which of these your key may use.
 CANDIDATES="gpt-6-luna gpt-5.6-luna gpt-6-sol gpt-5.6-sol gpt-6.1-sol gpt-6.1-terra gpt-6-astra"
 
@@ -43,7 +43,7 @@ die() {
 for arg in "$@"; do
   case "$arg" in
     -h | --help)
-      say "Connects OpenCode on this computer to the DozalDevs ChatGPT relay with your personal key."
+      say "Connects OpenCode on this computer to the DozalDevs AI relay with your personal key."
       say "  bash setup-opencode.sh           set everything up (asks for your key)"
       say "  bash setup-opencode.sh --check   change nothing; prove your key and models work"
       exit 0
@@ -119,25 +119,27 @@ function run(argv) {
     return String(Math.floor((Date.parse(argv[3]) - Date.parse(first)) / 86400000));
   }
   if (op === 'config') {
-    var path = argv[1], id = argv[2], baseURL = argv[3], name = argv[4], allowed = argv[5].split(' '), backup = argv[6], keyFile = argv[7], releaseDate = argv[8];
+    var path = argv[1], id = argv[2], baseURL = argv[3], name = argv[4], allowed = argv[5].split(' '), backup = argv[6], keyFile = argv[7], releaseDate = argv[8], usable = (argv[9] || argv[5]).split(' '), namesText = argv[10] || '';
+    var names = {};
+    namesText.split('\n').forEach(function (line) { var i = line.indexOf('\t'); if (i > 0) names[line.slice(0, i)] = line.slice(i + 1); });
     var loaded = loadObject(path);
     var cfg = loaded.obj;
     var models = {};
-    allowed.forEach(function (m) { models[m] = { name: prettyName(m) }; });
+    allowed.forEach(function (m) { models[m] = { name: names[m] || prettyName(m) }; });
     if (!cfg.provider || typeof cfg.provider !== 'object') cfg.provider = {};
     cfg.provider[id] = { npm: '@ai-sdk/openai-compatible', name: name, options: { baseURL: baseURL, apiKey: '{file:' + keyFile + '}' }, models: models };
     // OpenCode 2.x only lists a model in its picker when it looks recent and is the newest of its family,
     // so give each model a current release date and a family of its own. This block replaces the 2.x view of
     // the provider, so it has to carry the connection too, not just the models.
     var pm = {};
-    allowed.forEach(function (m) { pm[m] = { name: prettyName(m), family: m, releaseDate: releaseDate }; });
+    allowed.forEach(function (m) { pm[m] = { name: names[m] || prettyName(m), family: m, releaseDate: releaseDate }; });
     if (!cfg.providers || typeof cfg.providers !== 'object' || Array.isArray(cfg.providers)) cfg.providers = {};
     cfg.providers[id] = { name: name, package: '@opencode/ai/providers/openai-compatible', settings: { baseURL: baseURL, apiKey: '{file:' + keyFile + '}' }, models: pm };
     var notes = [];
     var current = typeof cfg.model === 'string' ? cfg.model : '';
     var ours = current.indexOf(id + '/') === 0;
-    if (!current || (ours && allowed.indexOf(current.slice(id.length + 1)) === -1)) {
-      cfg.model = id + '/' + allowed[0];
+    if (!current || (ours && usable.indexOf(current.slice(id.length + 1)) === -1)) {
+      cfg.model = id + '/' + usable[0];
     } else if (!ours) {
       notes.push('kept-model');
     }
@@ -211,8 +213,14 @@ elif op == 'age':
         print((d(a[3]) - d(dates[0])).days)
 elif op == 'config':
     path, pid, base, name, allowed, backup, key_file, release_date = a[1], a[2], a[3], a[4], a[5].split(' '), a[6], a[7], a[8]
+    usable = (a[9] if len(a) > 9 and a[9] else a[5]).split(' ')
+    names = {}
+    for line in (a[10] if len(a) > 10 else '').split('\n'):
+        if '\t' in line:
+            k, v = line.split('\t', 1)
+            names[k] = v
     raw, cfg = load(path)
-    models = {m: {'name': pretty_name(m)} for m in allowed}
+    models = {m: {'name': names.get(m) or pretty_name(m)} for m in allowed}
     if not isinstance(cfg.get('provider'), dict):
         cfg['provider'] = {}
     cfg['provider'][pid] = {
@@ -223,12 +231,12 @@ elif op == 'config':
     }
     if not isinstance(cfg.get('providers'), dict):
         cfg['providers'] = {}
-    cfg['providers'][pid] = {'name': name, 'package': '@opencode/ai/providers/openai-compatible', 'settings': {'baseURL': base, 'apiKey': '{file:' + key_file + '}'}, 'models': {m: {'name': pretty_name(m), 'family': m, 'releaseDate': release_date} for m in allowed}}
+    cfg['providers'][pid] = {'name': name, 'package': '@opencode/ai/providers/openai-compatible', 'settings': {'baseURL': base, 'apiKey': '{file:' + key_file + '}'}, 'models': {m: {'name': names.get(m) or pretty_name(m), 'family': m, 'releaseDate': release_date} for m in allowed}}
     notes = []
     current = cfg['model'] if isinstance(cfg.get('model'), str) else ''
     ours = current.startswith(pid + '/')
-    if not current or (ours and current[len(pid) + 1:] not in allowed):
-        cfg['model'] = pid + '/' + allowed[0]
+    if not current or (ours and current[len(pid) + 1:] not in usable):
+        cfg['model'] = pid + '/' + usable[0]
     elif not ours:
         notes.append('kept-model')
     if isinstance(cfg.get('enabled_providers'), list) and pid not in cfg['enabled_providers']:
@@ -302,29 +310,47 @@ case "$code" in
 esac
 
 # ---- 4. Find out which models this key may use ----
-say "Finding the models your key can use (this takes a few seconds)..."
+# The relay knows: it lists what this key can use now first, then models that need a request, marked as such.
+# ALLOWED = usable right now; LISTED = everything written into OpenCode (usable ones and "on request" ones);
+# NAMES maps a model id to the display name the relay gave it, one "id<TAB>name" per line.
+say "Finding the models your key can use..."
 ALLOWED=""
-for model in $CANDIDATES; do
-  payload="{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with exactly: ok\"}]}"
-  code="$(curl_relay POST /v1/chat/completions "$payload")"
+LISTED=""
+NAMES=""
+code="$(curl_relay GET /setup/models)"
+if [ "$code" = "200" ]; then
+  while IFS="$(printf '\t')" read -r id state name; do
+    [ -n "$id" ] || continue
+    case "$state" in
+      allowed) ALLOWED="$ALLOWED $id"; LISTED="$LISTED $id"; ok "$id" ;;
+      on_request) LISTED="$LISTED $id"; say "     $id: on request (ask the engineering team for temporary access)" ;;
+      *) continue ;;
+    esac
+    NAMES="$NAMES$id$(printf '\t')$name
+"
+  done <"$BODY_FILE"
+else
+  # An older relay without /setup/models: find the usable models by trying each one.
   case "$code" in
-    200 | 429)
-      # 429 means the key is allowed to use the model but is at its daily limit right now.
-      ALLOWED="$ALLOWED $model"
-      if [ "$code" = "429" ]; then warn "$model: your daily limit is used up for today; it will work again after midnight UTC."; else ok "$model"; fi
-      ;;
-    403)
-      if grep -q 'model_not_allowed' "$BODY_FILE"; then
-        say "     $model: not enabled for your key (skipped)"
-      else
-        die "the relay rejected your key ($(relay_message))."
-      fi
-      ;;
-    000) die "lost the connection to the relay while testing models. Try again." ;;
-    *) say "     $model: not available right now (skipped)" ;;
+    000) die "lost the connection to the relay while listing models. Try again." ;;
+    401 | 403) die "the relay rejected your key ($(relay_message))." ;;
   esac
-done
+  for model in $CANDIDATES; do
+    payload="{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with exactly: ok\"}]}"
+    code="$(curl_relay POST /v1/chat/completions "$payload")"
+    case "$code" in
+      200 | 429)
+        ALLOWED="$ALLOWED $model"; LISTED="$LISTED $model"
+        if [ "$code" = "429" ]; then warn "$model: your daily limit is used up for today; it will work again after midnight UTC."; else ok "$model"; fi
+        ;;
+      403) say "     $model: not enabled for your key (skipped)" ;;
+      000) die "lost the connection to the relay while testing models. Try again." ;;
+      *) say "     $model: not available right now (skipped)" ;;
+    esac
+  done
+fi
 ALLOWED="${ALLOWED# }"
+LISTED="${LISTED# }"
 [ -n "$ALLOWED" ] || die "your key is not allowed to use any model yet. Ask the engineering team to enable one."
 DEFAULT_MODEL="${ALLOWED%% *}"
 
@@ -358,7 +384,7 @@ else
 fi
 chmod 600 "$KEY_FILE"
 
-config_result="$(run_editor config "$CONFIG_FILE" "$PROVIDER_ID" "$RELAY_URL/v1" "$PROVIDER_NAME" "$ALLOWED" "$CONFIG_FILE.bak-$STAMP" "$KEY_FILE" "$RELEASE_DATE")"
+config_result="$(run_editor config "$CONFIG_FILE" "$PROVIDER_ID" "$RELAY_URL/v1" "$PROVIDER_NAME" "$LISTED" "$CONFIG_FILE.bak-$STAMP" "$KEY_FILE" "$RELEASE_DATE" "$ALLOWED" "$NAMES")"
 
 ok "OpenCode settings: ${config_result%% *} ($CONFIG_FILE)"
 ok "Your key: $key_result (private file $KEY_FILE)"
@@ -367,6 +393,9 @@ case "$config_result" in *kept-model*) say "     Your existing default model was
 # ---- 6. Tell them what to do next ----
 say ""
 say "All set. Models you can use: $ALLOWED"
+ON_REQUEST=""
+for m in $LISTED; do case " $ALLOWED " in *" $m "*) ;; *) ON_REQUEST="$ON_REQUEST $m" ;; esac; done
+[ -z "$ON_REQUEST" ] || say "Listed as \"on request\" (ask the engineering team for temporary access):${ON_REQUEST}"
 say "Default model: $PROVIDER_ID/$DEFAULT_MODEL"
 say ""
 APP_FOUND=""

@@ -204,7 +204,7 @@ for (const r of runners) {
     assert.equal(res.code, 0, res.out);
     assert.match(
       res.out,
-      /All set\. Models you can use: gpt-6-luna gpt-5\.6-luna/,
+      /All set\. Models you can use: gpt-6-luna gpt-5\.6-luna\r?\n/,
     );
     assert.equal(fs.readFileSync(sb.keyFile, "utf-8"), KEYS.luna);
     const raw = fs.readFileSync(sb.configFile);
@@ -216,7 +216,17 @@ for (const r of runners) {
     assert.equal(p.npm, "@ai-sdk/openai-compatible");
     assert.equal(p.options.baseURL, `${relay.url}/v1`);
     assert.equal(p.options.apiKey, expectedKeyRef(sb));
-    assert.deepEqual(Object.keys(p.models), ["gpt-6-luna", "gpt-5.6-luna"]);
+    assert.deepEqual(Object.keys(p.models), [
+      "gpt-6-luna",
+      "gpt-5.6-luna",
+      "claude-opus-5-5",
+    ]);
+    assert.equal(
+      p.models["claude-opus-5-5"].name,
+      "Claude Opus 5.5 (on request)",
+      "marked, so nobody expects it to work",
+    );
+    assert.match(res.out, /Listed as "on request".*claude-opus-5-5/);
     assert.equal(p.models["gpt-6-luna"].name, "GPT-6 Luna");
     assert.equal(p.models["gpt-5.6-luna"].name, "GPT-5.6 Luna");
     assert.equal(
@@ -353,7 +363,7 @@ for (const r of runners) {
       "@opencode/ai/providers/openai-compatible",
       "2.x needs the connection in this block",
     );
-    assert.equal(block.name, "DozalDevs ChatGPT Relay");
+    assert.equal(block.name, "DozalDevs AI Relay");
     assert.equal(block.settings.baseURL, `${relay.url}/v1`);
     assert.equal(block.settings.apiKey, expectedKeyRef(sb));
     assert.equal(
@@ -406,6 +416,7 @@ for (const r of runners) {
     assert.deepEqual(Object.keys(cfg.providers["dozaldevs-relay"].models), [
       "gpt-6-luna",
       "gpt-5.6-luna",
+      "claude-opus-5-5",
     ]);
   });
 
@@ -456,6 +467,40 @@ for (const r of runners) {
     );
   });
 
+  test(`${r.name}: against an older relay without /setup/models it still finds the usable models by trying them`, async (t) => {
+    const relay = await startMockRelay({ legacy: true });
+    const sb = sandbox();
+    t.after(() => relay.close());
+    const res = await run(r, sb, relay.url, KEYS.luna);
+    assert.equal(res.code, 0, res.out);
+    assert.deepEqual(
+      Object.keys(readJson(sb.configFile).provider["dozaldevs-relay"].models),
+      ["gpt-6-luna", "gpt-5.6-luna"],
+    );
+    assert.ok(
+      relay.calls.some((c) => c.path === "/setup/models"),
+      "it asked first",
+    );
+    assert.ok(
+      relay.calls.some((c) => c.path === "/v1/chat/completions"),
+      "then fell back to probing",
+    );
+    const capped = await run(r, sandbox(), relay.url, KEYS.capped);
+    assert.equal(capped.code, 0, capped.out);
+    assert.match(capped.out, /daily limit is used up/);
+  });
+
+  test(`${r.name}: models are never probed when the relay lists them (no tokens spent)`, async (t) => {
+    const relay = await startMockRelay();
+    const sb = sandbox();
+    t.after(() => relay.close());
+    assert.equal((await run(r, sb, relay.url, KEYS.wide)).code, 0);
+    assert.equal(
+      relay.calls.filter((c) => c.path === "/v1/chat/completions").length,
+      0,
+    );
+  });
+
   test(`${r.name}: a key allowed more models lists exactly the ones the relay serves, cheapest first`, async (t) => {
     const relay = await startMockRelay();
     const sb = sandbox();
@@ -469,24 +514,28 @@ for (const r of runners) {
       "gpt-6-sol",
       "gpt-5.6-sol",
       "gpt-6-astra",
+      "claude-opus-5-5",
     ]);
-    assert.equal(cfg.model, "dozaldevs-relay/gpt-6-luna");
+    assert.equal(
+      cfg.model,
+      "dozaldevs-relay/gpt-6-luna",
+      "the default is always a model the key can use",
+    );
     assert.equal(
       cfg.provider["dozaldevs-relay"].models["gpt-6-astra"].name,
       "GPT-6 Astra",
     );
   });
 
-  test(`${r.name}: a key at its daily limit is still set up, with a warning`, async (t) => {
+  test(`${r.name}: a key at its daily limit is still set up`, async (t) => {
     const relay = await startMockRelay();
     const sb = sandbox();
     t.after(() => relay.close());
     const res = await run(r, sb, relay.url, KEYS.capped);
     assert.equal(res.code, 0, res.out);
-    assert.match(res.out, /daily limit is used up/);
     assert.deepEqual(
       Object.keys(readJson(sb.configFile).provider["dozaldevs-relay"].models),
-      ["gpt-6-luna", "gpt-5.6-luna"],
+      ["gpt-6-luna", "gpt-5.6-luna", "claude-opus-5-5"],
     );
   });
 

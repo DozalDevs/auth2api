@@ -1,5 +1,6 @@
 import express from "express";
-import { ApiKeyEntry } from "../config";
+import { ApiKeyEntry, KeyGrant } from "../config";
+import { ModelCatalog } from "../models/catalog";
 import { StatsRecorder } from "../stats/recorder";
 import { hashApiKey } from "../utils/common";
 import { KeyPatch, KeyStore, KeyStoreError } from "./store";
@@ -8,7 +9,22 @@ export function utcDay(date = new Date()): string {
   return date.toISOString().slice(0, 10);
 }
 
-function describe(entry: ApiKeyEntry, stats?: StatsRecorder) {
+function describeGrant(grant: KeyGrant, at: number, ended: boolean) {
+  const until = Date.parse(grant.until);
+  return {
+    id: grant.id,
+    models: grant.models,
+    until: grant.until,
+    granted_at: grant["granted-at"],
+    note: grant.note ?? null,
+    ...(ended
+      ? { ended_seconds_ago: Math.max(0, Math.round((at - until) / 1000)) }
+      : { seconds_left: Math.max(0, Math.round((until - at) / 1000)) }),
+  };
+}
+
+function describe(entry: ApiKeyEntry, store: KeyStore, stats?: StatsRecorder) {
+  const at = store.now();
   const limit = entry["daily-token-limit"] ?? null;
   const used = stats
     ? stats.tokensOnDay(hashApiKey(entry.key), utcDay())
@@ -16,6 +32,12 @@ function describe(entry: ApiKeyEntry, stats?: StatsRecorder) {
   return {
     name: entry.name,
     models: entry.models,
+    grants: store
+      .activeGrants(entry, at)
+      .map((g) => describeGrant(g, at, false)),
+    ended_grants: store
+      .endedGrants(entry, at)
+      .map((g) => describeGrant(g, at, true)),
     daily_token_limit: limit,
     disabled: entry.disabled === true,
     admin: entry.admin === true,
@@ -50,15 +72,25 @@ function handle(fn: express.RequestHandler): express.RequestHandler {
   };
 }
 
+function grantMinutes(body: any): number {
+  if (body.minutes !== undefined) return body.minutes;
+  if (typeof body.hours === "number") return Math.round(body.hours * 60);
+  return NaN;
+}
+
 export function registerKeyRoutes(
   app: express.Application,
   store: KeyStore,
   stats?: StatsRecorder,
+  catalog?: ModelCatalog,
 ): void {
+  const actor = (res: express.Response): string =>
+    (res.locals.keyEntry as ApiKeyEntry | undefined)?.name ?? "an admin";
+
   app.get(
     "/admin/keys",
     handle((_req, res) => {
-      res.json({ keys: store.list().map((e) => describe(e, stats)) });
+      res.json({ keys: store.list().map((e) => describe(e, store, stats)) });
     }),
   );
 
@@ -74,7 +106,9 @@ export function registerKeyRoutes(
         }),
         ...(b.admin !== undefined && { admin: b.admin }),
       });
-      res.status(201).json({ ...describe(entry, stats), key: entry.key });
+      res
+        .status(201)
+        .json({ ...describe(entry, store, stats), key: entry.key });
     }),
   );
 
@@ -85,7 +119,35 @@ export function registerKeyRoutes(
         req.params.name,
         patchFromBody(req.body ?? {}),
       );
-      res.json(describe(entry, stats));
+      res.json(describe(entry, store, stats));
+    }),
+  );
+
+  app.post(
+    "/admin/keys/:name/grants",
+    handle((req, res) => {
+      const b = req.body ?? {};
+      const { entry, grant } = store.grant(
+        req.params.name,
+        { models: b.models, minutes: grantMinutes(b), note: b.note },
+        actor(res),
+      );
+      res.status(201).json({
+        ...describe(entry, store, stats),
+        grant: describeGrant(grant, store.now(), false),
+      });
+    }),
+  );
+
+  app.delete(
+    "/admin/keys/:name/grants/:id",
+    handle((req, res) => {
+      const entry = store.revokeGrant(
+        req.params.name,
+        req.params.id,
+        actor(res),
+      );
+      res.json(describe(entry, store, stats));
     }),
   );
 
@@ -96,6 +158,30 @@ export function registerKeyRoutes(
       res.status(204).end();
     }),
   );
+
+  if (catalog) {
+    app.get(
+      "/admin/models",
+      handle((_req, res) => {
+        res.json({ models: catalog.list(), source: catalog.source() });
+      }),
+    );
+
+    app.post(
+      "/admin/models",
+      handle((req, res) => {
+        res.status(201).json(catalog.upsert(req.body ?? {}));
+      }),
+    );
+
+    app.delete(
+      "/admin/models/:id",
+      handle((req, res) => {
+        catalog.remove(req.params.id);
+        res.status(204).end();
+      }),
+    );
+  }
 
   app.get(
     "/admin/usage",

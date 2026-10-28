@@ -159,12 +159,18 @@ test(
       (m) => m.providerID === "dozaldevs-relay",
     );
     assert.deepEqual(mine.map((m: any) => m.modelID).sort(), [
+      "claude-opus-5-5",
       "gpt-5.6-luna",
       "gpt-5.6-sol",
       "gpt-6-astra",
       "gpt-6-luna",
       "gpt-6-sol",
     ]);
+    assert.equal(
+      mine.find((m: any) => m.modelID === "claude-opus-5-5").name,
+      "Claude Opus 5.5 (on request)",
+      "a model the key cannot use yet is labelled in the app's own menu",
+    );
     for (const m of mine) {
       assert.ok(
         Math.abs(Date.now() - m.time.released) < 6 * 30.436875 * 86_400_000,

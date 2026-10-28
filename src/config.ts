@@ -65,6 +65,33 @@ export interface ApiKeyEntry {
   "daily-token-limit"?: number;
   disabled?: boolean;
   admin?: boolean;
+  grants?: KeyGrant[];
+}
+
+/**
+ * Temporary extra model access for one key. It adds to `models` until `until`
+ * and then stops applying; expired grants are kept for a day so the error a
+ * caller gets can say the access just ended.
+ */
+export interface KeyGrant {
+  id: string;
+  models: string[];
+  until: string;
+  "granted-at": string;
+  note?: string;
+}
+
+export type ModelAccess = "standard" | "on_request";
+
+/**
+ * A model the relay can serve, as the admin UI and the setup scripts see it.
+ * `on_request` models are listed (labelled) for every key so access can be
+ * granted later without anyone re-running setup.
+ */
+export interface CatalogModel {
+  id: string;
+  name: string;
+  access: ModelAccess;
 }
 
 export interface DashboardUser {
@@ -78,6 +105,7 @@ export interface Config {
   "auth-dir": string;
   "api-keys": ApiKeyEntry[];
   "dashboard-users"?: DashboardUser[];
+  models?: CatalogModel[];
   "body-limit": string;
   cloaking: CloakingConfig;
   timeouts: TimeoutConfig;
@@ -136,6 +164,89 @@ export function generateApiKey(): string {
 export const KEY_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,62}$/i;
 
 /** Validates one api-keys entry; throws with a message naming the problem. */
+const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
+const GRANT_ID_RE = /^[a-f0-9]{8}$/;
+
+export function isValidModelId(id: unknown): id is string {
+  return typeof id === "string" && MODEL_ID_RE.test(id);
+}
+
+export function validateGrants(list: unknown, where: string): KeyGrant[] {
+  if (!Array.isArray(list)) throw new Error(`${where}: grants must be a list`);
+  return list.map((g, i) => {
+    const w = `${where}.grants[${i}]`;
+    const o = (g ?? {}) as Record<string, unknown>;
+    if (typeof o.id !== "string" || !GRANT_ID_RE.test(o.id)) {
+      throw new Error(`${w}: id must be 8 hex characters`);
+    }
+    if (
+      !Array.isArray(o.models) ||
+      o.models.length === 0 ||
+      o.models.length > 50 ||
+      !o.models.every(isValidModelId)
+    ) {
+      throw new Error(`${w}: models must be a non-empty list of model names`);
+    }
+    for (const field of ["until", "granted-at"]) {
+      const v = o[field];
+      if (typeof v !== "string" || Number.isNaN(Date.parse(v))) {
+        throw new Error(`${w}: ${field} must be a timestamp`);
+      }
+    }
+    if (
+      o.note !== undefined &&
+      (typeof o.note !== "string" || o.note.length > 200)
+    ) {
+      throw new Error(`${w}: note must be text of at most 200 characters`);
+    }
+    const grant: KeyGrant = {
+      id: o.id,
+      models: o.models as string[],
+      until: new Date(Date.parse(o.until as string)).toISOString(),
+      "granted-at": new Date(
+        Date.parse(o["granted-at"] as string),
+      ).toISOString(),
+    };
+    if (typeof o.note === "string" && o.note.trim()) grant.note = o.note.trim();
+    return grant;
+  });
+}
+
+export function validateCatalogModel(m: unknown, where: string): CatalogModel {
+  const o = (m ?? {}) as Record<string, unknown>;
+  if (!isValidModelId(o.id)) {
+    throw new Error(
+      `${where}: id must be a model name (letters, digits, . _ : / -)`,
+    );
+  }
+  if (
+    typeof o.name !== "string" ||
+    !o.name.trim() ||
+    o.name.length > 80 ||
+    /[\u0000-\u001f]/.test(o.name)
+  ) {
+    throw new Error(`${where}: name must be 1 to 80 characters of plain text`);
+  }
+  const access = o.access ?? "standard";
+  if (access !== "standard" && access !== "on_request") {
+    throw new Error(`${where}: access must be "standard" or "on_request"`);
+  }
+  return { id: o.id, name: o.name.trim(), access };
+}
+
+export function validateCatalog(list: unknown): CatalogModel[] | undefined {
+  if (list === undefined || list === null) return undefined;
+  if (!Array.isArray(list)) throw new Error("models must be a list");
+  const seen = new Set<string>();
+  return list.map((m, i) => {
+    const model = validateCatalogModel(m, `models[${i}]`);
+    const k = model.id.toLowerCase();
+    if (seen.has(k)) throw new Error(`models: duplicate id "${model.id}"`);
+    seen.add(k);
+    return model;
+  });
+}
+
 export function validateApiKeyEntry(e: unknown, where: string): ApiKeyEntry {
   if (!e || typeof e !== "object" || Array.isArray(e)) {
     throw new Error(
@@ -170,11 +281,13 @@ export function validateApiKeyEntry(e: unknown, where: string): ApiKeyEntry {
       throw new Error(`${where}: ${flag} must be true or false`);
     }
   }
+  const grants = o.grants === undefined ? [] : validateGrants(o.grants, where);
   const entry: ApiKeyEntry = {
     name: o.name,
     key: o.key,
     models: o.models as string[],
   };
+  if (grants.length) entry.grants = grants;
   if (limit !== undefined) entry["daily-token-limit"] = limit as number;
   if (o.disabled === true) entry.disabled = true;
   if (o.admin === true) entry.admin = true;
@@ -256,6 +369,7 @@ export function loadConfig(configPath?: string): Config {
 
   raw["api-keys"] = validateApiKeys(raw["api-keys"]);
   raw["dashboard-users"] = validateDashboardUsers(raw["dashboard-users"]);
+  raw.models = validateCatalog(raw.models);
   if (
     !raw.stats.enabled &&
     raw["api-keys"].some((k) => k["daily-token-limit"] !== undefined)
@@ -267,21 +381,34 @@ export function loadConfig(configPath?: string): Config {
   return raw;
 }
 
-export function persistApiKeys(
+function persistSection(
   filePath: string,
-): (entries: ApiKeyEntry[]) => void {
-  return (entries) => {
+  section: string,
+): (value: unknown) => void {
+  return (value) => {
     const parsed = fs.existsSync(filePath)
-      ? (yaml.load(fs.readFileSync(filePath, "utf-8")) as Record<
+      ? ((yaml.load(fs.readFileSync(filePath, "utf-8")) as Record<
           string,
           unknown
-        >)
+        >) ?? {})
       : {};
-    parsed["api-keys"] = entries;
+    parsed[section] = value;
     const tmp = `${filePath}.tmp`;
     fs.writeFileSync(tmp, yaml.dump(parsed, { lineWidth: -1 }), {
       mode: 0o600,
     });
     fs.renameSync(tmp, filePath);
   };
+}
+
+export function persistApiKeys(
+  filePath: string,
+): (entries: ApiKeyEntry[]) => void {
+  return persistSection(filePath, "api-keys");
+}
+
+export function persistCatalog(
+  filePath: string,
+): (models: CatalogModel[]) => void {
+  return persistSection(filePath, "models");
 }

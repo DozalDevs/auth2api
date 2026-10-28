@@ -12,13 +12,33 @@ const LUNA = ["gpt-6-luna", "gpt-5.6-luna"];
 const WIDE = [...LUNA, "gpt-6-sol", "gpt-5.6-sol", "gpt-6-astra"];
 const NOT_SERVED = ["gpt-6.1-sol", "gpt-6.1-terra"];
 
+export const CATALOG: {
+  id: string;
+  name: string;
+  access: "standard" | "on_request";
+}[] = [
+  { id: "gpt-6-luna", name: "GPT-6 Luna", access: "standard" },
+  { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", access: "standard" },
+  { id: "gpt-6-sol", name: "GPT-6 Sol", access: "standard" },
+  { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", access: "standard" },
+  { id: "gpt-6-astra", name: "GPT-6 Astra", access: "standard" },
+  { id: "claude-opus-5-5", name: "Claude Opus 5.5", access: "on_request" },
+];
+
+export interface MockOptions {
+  /** Pretend to be an older relay that has no /setup/models. */
+  legacy?: boolean;
+}
+
 export interface MockRelay {
   url: string;
   calls: { method: string; path: string; model?: string }[];
   close(): Promise<void>;
 }
 
-export async function startMockRelay(): Promise<MockRelay> {
+export async function startMockRelay(
+  options: MockOptions = {},
+): Promise<MockRelay> {
   const calls: MockRelay["calls"] = [];
   const server = http.createServer((req, res) => {
     const json = (status: number, body: unknown) => {
@@ -46,6 +66,21 @@ export async function startMockRelay(): Promise<MockRelay> {
         return json(403, { error: { message: "API key disabled" } });
       if (req.url === "/v1/models" && req.method === "GET")
         return json(200, { object: "list", data: [] });
+      if (
+        req.url === "/setup/models" &&
+        req.method === "GET" &&
+        !options.legacy
+      ) {
+        const allowed = key === KEYS.wide ? WIDE : LUNA;
+        const lines: string[] = [];
+        for (const m of CATALOG) {
+          if (allowed.includes(m.id)) lines.push(`${m.id}\tallowed\t${m.name}`);
+          else if (m.access === "on_request")
+            lines.push(`${m.id}\ton_request\t${m.name} (on request)`);
+        }
+        res.writeHead(200, { "content-type": "text/plain" });
+        return res.end(lines.length ? `${lines.join("\n")}\n` : "");
+      }
       if (req.url === "/v1/chat/completions" && req.method === "POST") {
         const allowed = key === KEYS.wide ? WIDE : LUNA;
         const model = String(body.model || "");

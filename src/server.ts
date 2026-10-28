@@ -15,7 +15,9 @@ import { StatsRecorder } from "./stats/recorder";
 import { RateLimiter, clientIp } from "./utils/rate-limit";
 import { KeyStore } from "./keys/store";
 import { registerKeyRoutes, utcDay } from "./keys/routes";
-import { ApiKeyEntry } from "./config";
+import { ApiKeyEntry, CatalogModel } from "./config";
+import { ModelCatalog } from "./models/catalog";
+import { resolveModel } from "./upstream/translator";
 import { DASHBOARD_CSP, DASHBOARD_HTML } from "./ui/dashboard";
 import { registerSetupRoutes } from "./setup/routes";
 import {
@@ -26,11 +28,23 @@ import {
   checkLogin,
 } from "./auth/dashboard-login";
 
+function agoText(ms: number): string {
+  const minutes = Math.max(0, Math.round(ms / 60_000));
+  if (minutes < 1) return "less than a minute ago";
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  const hours = Math.round(minutes / 60);
+  return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+}
+
 export function createServer(
   config: Config,
   registry: ProviderRegistry,
   statsRecorder?: StatsRecorder,
-  opts: { persistKeys?: (entries: ApiKeyEntry[]) => void } = {},
+  opts: {
+    persistKeys?: (entries: ApiKeyEntry[]) => void;
+    persistCatalog?: (models: CatalogModel[]) => void;
+    now?: () => number;
+  } = {},
 ): express.Application {
   const app = express();
   const sessions = new SessionStore();
@@ -38,6 +52,10 @@ export function createServer(
   const keyStore = new KeyStore(config["api-keys"], {
     statsEnabled: !!statsRecorder,
     persist: opts.persistKeys,
+    now: opts.now,
+  });
+  const catalog = new ModelCatalog(config.models, {
+    persist: opts.persistCatalog,
   });
 
   app.use(express.json({ limit: config["body-limit"] }));
@@ -76,13 +94,15 @@ export function createServer(
 
   // Rate limiting middleware — see utils/rate-limit.ts for the keying rules.
   const rateLimiter = new RateLimiter((key) => keyStore.has(key));
-  app.use("/v1", (req, res, next) => {
+  const rateLimit: express.RequestHandler = (req, res, next) => {
     if (!rateLimiter.allow(req)) {
       res.status(429).json({ error: { message: "Too many requests" } });
       return;
     }
     next();
-  });
+  };
+  app.use("/v1", rateLimit);
+  app.use("/setup/models", rateLimit);
 
   // Seed res.locals.stats so the stats-finish middleware can record this
   // request even if the downstream handler aborts before filling in the
@@ -310,7 +330,7 @@ export function createServer(
   app.use("/admin", adminAuth);
   app.use("/admin", statsFinishMiddleware);
   app.use("/admin", requireAdmin);
-  registerKeyRoutes(app, keyStore, statsRecorder);
+  registerKeyRoutes(app, keyStore, statsRecorder, catalog);
 
   // GET /admin/stats — three-axis aggregated call statistics.
   //   byClient — keyed by sha256(api-key); show short hex prefix to operator
@@ -368,6 +388,31 @@ export function createServer(
     });
   });
 
+  // What the setup scripts write into OpenCode for this key: one tab-separated
+  // line per model, "<id>\t<allowed|on_request>\t<display name>". Models the key
+  // can use now come first-class; "on request" models are listed too, labelled,
+  // so a temporary grant works without anyone re-running setup.
+  app.get("/setup/models", requireApiKey, (_req, res) => {
+    const entry = res.locals.keyEntry as ApiKeyEntry;
+    const listed = new Set<string>();
+    const lines: string[] = [];
+    for (const m of catalog.list()) {
+      listed.add(resolveModel(m.id));
+      if (keyStore.allows(entry, m.id)) {
+        lines.push(`${m.id}\tallowed\t${m.name}`);
+      } else if (m.access === "on_request") {
+        lines.push(`${m.id}\ton_request\t${m.name} (on request)`);
+      }
+    }
+    for (const id of keyStore.allowedIds(entry)) {
+      if (!listed.has(resolveModel(id))) lines.push(`${id}\tallowed\t${id}`);
+    }
+    res
+      .set("Cache-Control", "no-store")
+      .type("text/plain; charset=utf-8")
+      .send(lines.length ? `${lines.join("\n")}\n` : "");
+  });
+
   app.use(["/v1", "/codex", "/backend-api/codex"], requireApiKey);
   app.use(["/v1", "/codex", "/backend-api/codex"], statsFinishMiddleware);
 
@@ -389,10 +434,14 @@ export function createServer(
         return;
       }
       if (!keyStore.allows(entry, model)) {
+        const ended = keyStore.endedGrantFor(entry, model);
         res.status(403).json({
           error: {
-            message: `model "${model}" is not enabled for this key`,
+            message: ended
+              ? `Your temporary access to "${model}" ended ${agoText(keyStore.now() - Date.parse(ended.until))}. Ask the engineering team for more time.`
+              : `"${model}" is not enabled for this key. Ask the engineering team for access.`,
             type: "model_not_allowed",
+            ...(ended && { code: "grant_expired" }),
           },
         });
         return;
@@ -429,6 +478,12 @@ export function createServer(
         })),
       )
       .filter((m) => keyStore.allows(entry, m.id));
+    const reported = new Set(data.map((m) => resolveModel(m.id)));
+    for (const m of catalog.list()) {
+      if (reported.has(resolveModel(m.id)) || !keyStore.allows(entry, m.id))
+        continue;
+      data.push({ id: m.id, object: "model", created, owned_by: "relay" });
+    }
     res.json({ object: "list", data });
   });
 

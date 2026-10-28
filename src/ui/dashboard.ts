@@ -40,7 +40,7 @@ header.top .actions { display: flex; align-items: center; gap: 8px; flex-wrap: w
 .login .panel { padding: 24px; }
 .login h1 { margin-bottom: 16px; }
 .login form > * + * { margin-top: 12px; }
-.krow { display: grid; grid-template-columns: 1.1fr 1.5fr 1.4fr 1fr 232px; gap: 12px; align-items: center; padding: 12px 0; border-top: 1px solid var(--line); }
+.krow { display: grid; grid-template-columns: 1.1fr 1.7fr 1.3fr .9fr 330px; gap: 12px; align-items: center; padding: 12px 0; border-top: 1px solid var(--line); }
 .krow.head { border-top: 0; padding-top: 0; color: var(--muted); font-size: 13px; font-weight: 600; }
 .krow .name { font-weight: 600; overflow-wrap: anywhere; }
 .krow .suffix { color: var(--muted); font-size: 13px; font-weight: 400; }
@@ -85,6 +85,42 @@ h3 { font-size: 14px; margin: 16px 0 4px; color: var(--muted); }
 .mt-s { margin-top: 6px; }
 .mt-m { margin-top: 8px; }
 .anyrow { font-weight: 400; display: flex; gap: 8px; align-items: center; }
+.ms { position: relative; }
+.ms-btn { width: 100%; min-height: 40px; display: flex; align-items: center; justify-content: space-between; gap: 8px; text-align: left; padding: 0 10px; }
+.ms-btn[aria-expanded=true] { border-color: var(--accent); }
+.ms-caret { color: var(--muted); }
+.ms-panel { margin-top: 6px; max-height: 340px; overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px; }
+.ms-search { margin-bottom: 6px; }
+.ms-row { font-weight: 400; display: flex; align-items: center; gap: 10px; margin: 0; min-height: 40px; padding: 0 8px; border-radius: 6px; cursor: pointer; }
+.ms-row:hover { background: var(--chip); }
+.ms-row input { flex: none; }
+.ms-name { flex: 1; overflow-wrap: anywhere; }
+.ms-id { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.ms-any { border-bottom: 1px solid var(--line); border-radius: 6px 6px 0 0; margin-bottom: 4px; font-weight: 600; }
+.ms-empty { color: var(--muted); padding: 8px; }
+.ms-foot { display: flex; justify-content: space-between; gap: 8px; padding-top: 8px; margin-top: 4px; border-top: 1px solid var(--line); }
+.ms-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.chip-x { min-height: 0; height: 18px; width: 18px; padding: 0; margin-left: 4px; border: 0; background: transparent; color: var(--muted); line-height: 1; border-radius: 999px; }
+.chip-x:hover { color: var(--danger); }
+.pills { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.pill { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; border: 1px solid var(--accent); color: var(--text); border-radius: 8px; padding: 3px 8px; }
+.pill .left { color: var(--accent); font-weight: 700; white-space: nowrap; }
+.pill.ended { border-color: var(--line); color: var(--muted); }
+.pill button { min-height: 24px; padding: 0 8px; font-size: 12px; margin-left: auto; }
+.dur { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.dur .seg { flex-wrap: wrap; }
+.dur-custom { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+.dur-custom input { width: 110px; }
+.dur-custom select { min-height: 40px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 0 8px; font: inherit; color: inherit; }
+.preview { margin-top: 8px; font-weight: 600; color: var(--accent); }
+.mrow { display: grid; grid-template-columns: 1.3fr 1.3fr 1.6fr 110px; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); }
+.mrow.head { border-top: 0; padding-top: 0; color: var(--muted); font-size: 13px; font-weight: 600; }
+.mrow select { min-height: 40px; width: 100%; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 0 8px; font: inherit; color: inherit; }
+.madd { display: grid; grid-template-columns: 1.3fr 1.3fr 1.6fr 110px; gap: 12px; align-items: end; margin-top: 12px; }
+.madd label { margin-bottom: 4px; }
+.madd button { white-space: nowrap; }
+.madd select { min-height: 40px; width: 100%; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 0 8px; font: inherit; color: inherit; }
+.krow-grid-extra { grid-column: 1 / -1; }
 @media (max-width: 760px) {
   main { padding: 12px; }
   .krow.head { display: none; }
@@ -95,12 +131,23 @@ h3 { font-size: 14px; margin: 16px 0 4px; color: var(--muted); }
   .form-actions button, .login button { flex: 1; }
   .inline { flex-direction: column; }
 }
+
+@media (max-width: 760px) {
+  .ms-panel { max-height: 60vh; }
+  .ms-row { min-height: 44px; }
+  .mrow.head { display: none; }
+  .mrow { grid-template-columns: 1fr; gap: 8px; padding: 14px 0; }
+  .madd { grid-template-columns: 1fr; }
+  .pill button { min-height: 36px; }
+  .dur .seg button { flex: 1; }
+}
 `;
 
 const JS = String.raw`
 (function () {
   'use strict';
-  var state = { keys: [], usage: null, days: 1, editing: null };
+  var state = { keys: [], usage: null, models: [], modelSource: 'default', days: 1, editing: null, granting: null };
+  var PRESETS = [{ label: '2 hours', minutes: 120 }, { label: '4 hours', minutes: 240 }, { label: '8 hours', minutes: 480 }, { label: '24 hours', minutes: 1440 }];
 
   function $(id) { return document.getElementById(id); }
   function h(tag, props, kids) {
@@ -125,6 +172,26 @@ const JS = String.raw`
     if (n >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'K';
     return String(n);
   }
+  function left(sec) {
+    if (sec <= 0) return 'ended';
+    var m = Math.floor(sec / 60);
+    if (m < 1) return 'under 1 min left';
+    if (m < 60) return m + ' min left';
+    var hr = Math.floor(m / 60), rest = m % 60;
+    if (hr < 48) return hr + 'h' + (rest ? ' ' + rest + 'm' : '') + ' left';
+    return Math.floor(hr / 24) + ' days left';
+  }
+  function agoShort(sec) {
+    var m = Math.round(sec / 60);
+    if (m < 1) return 'just now';
+    if (m < 60) return m + ' min ago';
+    return Math.round(m / 60) + 'h ago';
+  }
+  function nameOf(id) {
+    for (var i = 0; i < state.models.length; i++) if (state.models[i].id.toLowerCase() === String(id).toLowerCase()) return state.models[i].name;
+    return id;
+  }
+  function namesOf(ids) { return ids.map(nameOf).join(', '); }
 
   var statusTimer = null;
   function say(msg, kind) {
@@ -132,7 +199,7 @@ const JS = String.raw`
     el.textContent = msg || '';
     el.className = kind || '';
     clearTimeout(statusTimer);
-    if (msg && kind !== 'error') statusTimer = setTimeout(function () { say(''); }, 5000);
+    if (msg && kind !== 'error') statusTimer = setTimeout(function () { say(''); }, 6000);
   }
 
   function api(method, path, body) {
@@ -168,7 +235,120 @@ const JS = String.raw`
     say(err.message, 'error');
   }
 
+  // ---- Multi-select dropdown ----
+  var openMs = null;
+  document.addEventListener('click', function (ev) { if (openMs && !openMs.el.contains(ev.target)) openMs.close(); });
+  document.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Escape' && openMs) { var m = openMs; m.close(); m.focus(); }
+  });
+
+  function multiSelect(cfg) {
+    var st = { options: [], selected: [], any: false };
+    var btn = h('button', { type: 'button', class: 'ms-btn', 'aria-haspopup': 'true', 'aria-expanded': 'false', 'aria-labelledby': cfg.labelId + ' ' + cfg.id + '-btn', id: cfg.id + '-btn' });
+    var btnText = h('span', { text: '' });
+    btn.appendChild(btnText);
+    btn.appendChild(h('span', { class: 'ms-caret', 'aria-hidden': 'true', text: '\u25be' }));
+    var search = h('input', { type: 'text', class: 'ms-search', placeholder: 'Search models', 'aria-label': 'Search models', autocomplete: 'off' });
+    var anyCb = h('input', { type: 'checkbox' });
+    var anyRow = cfg.allowAny ? h('label', { class: 'ms-row ms-any' }, [anyCb, h('span', { class: 'ms-name', text: 'Any model' })]) : null;
+    var list = h('div', { class: 'ms-list' });
+    var clearBtn = h('button', { type: 'button', text: 'Clear' });
+    var doneBtn = h('button', { type: 'button', class: 'primary', text: 'Done' });
+    var panel = h('div', { class: 'ms-panel', hidden: true, role: 'group', 'aria-label': cfg.title || 'Models' }, [search, anyRow, list, h('div', { class: 'ms-foot' }, [clearBtn, doneBtn])]);
+    var chips = h('div', { class: 'ms-chips' });
+    var el = h('div', { class: 'ms' }, [btn, chips, panel]);
+    var api_ = {
+      el: el,
+      focus: function () { btn.focus(); },
+      close: function () { panel.hidden = true; btn.setAttribute('aria-expanded', 'false'); if (openMs === api_) openMs = null; },
+      open: function () {
+        if (openMs && openMs !== api_) openMs.close();
+        panel.hidden = false; btn.setAttribute('aria-expanded', 'true'); openMs = api_;
+        search.value = ''; filter(); search.focus();
+      },
+      get: function () { return st.any ? ['*'] : st.selected.slice(); },
+      set: function (values) {
+        st.any = values.indexOf('*') !== -1;
+        st.selected = values.filter(function (v) { return v !== '*'; });
+        renderRows(); summary();
+      },
+      setOptions: function (options) { st.options = options.slice(); renderRows(); summary(); }
+    };
+    function optionsWithSelected() {
+      var known = {}; st.options.forEach(function (o) { known[o.value.toLowerCase()] = true; });
+      var extra = st.selected.filter(function (v) { return !known[v.toLowerCase()]; }).map(function (v) { return { value: v, label: v + ' (not in list)' }; });
+      return st.options.concat(extra);
+    }
+    function labelFor(v) { var all = optionsWithSelected(); for (var i = 0; i < all.length; i++) if (all[i].value === v) return all[i].label; return v; }
+    function renderRows() {
+      clear(list);
+      var all = optionsWithSelected();
+      if (!all.length) list.appendChild(h('p', { class: 'ms-empty', text: cfg.emptyText || 'No models yet.' }));
+      all.forEach(function (o) {
+        var cb = h('input', { type: 'checkbox', value: o.value });
+        cb.checked = st.selected.indexOf(o.value) !== -1;
+        cb.disabled = st.any;
+        cb.addEventListener('change', function () {
+          if (cb.checked) { if (st.selected.indexOf(o.value) === -1) st.selected.push(o.value); }
+          else st.selected = st.selected.filter(function (v) { return v !== o.value; });
+          summary();
+        });
+        var row = h('label', { class: 'ms-row', 'data-text': (o.label + ' ' + o.value).toLowerCase() }, [cb, h('span', { class: 'ms-name', text: o.label }), h('span', { class: 'ms-id', text: o.value })]);
+        list.appendChild(row);
+      });
+      anyCb.checked = st.any;
+      filter();
+    }
+    function filter() {
+      var q = search.value.trim().toLowerCase();
+      Array.prototype.forEach.call(list.querySelectorAll('.ms-row'), function (row) { row.hidden = q !== '' && row.getAttribute('data-text').indexOf(q) === -1; });
+    }
+    function summary() {
+      var n = st.selected.length;
+      btnText.textContent = st.any ? 'Any model' : n === 0 ? (cfg.placeholder || 'Choose models') : n === 1 ? labelFor(st.selected[0]) : n + ' models selected';
+      clear(chips);
+      if (!st.any) st.selected.forEach(function (v) {
+        var x = h('button', { type: 'button', class: 'chip-x', 'aria-label': 'Remove ' + labelFor(v), text: '\u00d7' });
+        x.addEventListener('click', function () { st.selected = st.selected.filter(function (s) { return s !== v; }); renderRows(); summary(); });
+        chips.appendChild(h('span', { class: 'chip' }, [labelFor(v), x]));
+      });
+      if (cfg.onChange) cfg.onChange(api_.get());
+    }
+    btn.addEventListener('click', function () { if (panel.hidden) api_.open(); else api_.close(); });
+    btn.addEventListener('keydown', function (ev) { if (ev.key === 'ArrowDown' && panel.hidden) { ev.preventDefault(); api_.open(); } });
+    search.addEventListener('input', filter);
+    search.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter') { ev.preventDefault(); return; }
+      if (ev.key === 'ArrowDown') { var first = list.querySelector('.ms-row:not([hidden]) input:not(:disabled)'); if (first) { ev.preventDefault(); first.focus(); } }
+    });
+    anyCb.addEventListener('change', function () { st.any = anyCb.checked; renderRows(); summary(); });
+    clearBtn.addEventListener('click', function () { st.any = false; st.selected = []; renderRows(); summary(); search.focus(); });
+    doneBtn.addEventListener('click', function () { api_.close(); btn.focus(); });
+    return api_;
+  }
+
+  function catalogOptions() { return state.models.map(function (m) { return { value: m.id, label: m.name }; }); }
+  var keyModels = multiSelect({ id: 'f-models', labelId: 'f-models-label', allowAny: true, placeholder: 'Choose models', title: 'Models this key can use', emptyText: 'No models yet. Add one in the Models section.' });
+  var grantModels = multiSelect({ id: 'g-models', labelId: 'g-models-label', allowAny: false, placeholder: 'Choose models to unlock', title: 'Models to unlock', emptyText: 'No models to unlock.' });
+  $('f-models-slot').appendChild(keyModels.el);
+  $('g-models-slot').appendChild(grantModels.el);
+
+  // ---- Keys ----
   function usedToday(k) { return k.tokens_today === null ? null : k.tokens_today; }
+
+  function grantPills(k) {
+    if (!k.grants.length && !k.ended_grants.length) return null;
+    var box = h('div', { class: 'pills' });
+    k.grants.forEach(function (g) {
+      var t = h('span', { class: 'left', 'data-until': g.until, text: left(g.seconds_left) });
+      var end = h('button', { type: 'button', text: 'End now', 'aria-label': 'End access to ' + namesOf(g.models) + ' for ' + k.name, onclick: function () { revokeGrant(k, g); } });
+      box.appendChild(h('div', { class: 'pill', title: g.note ? 'Note: ' + g.note : '' }, [h('span', { text: namesOf(g.models) }), t, end]));
+    });
+    k.ended_grants.slice(0, 2).forEach(function (g) {
+      box.appendChild(h('div', { class: 'pill ended' }, [h('span', { text: namesOf(g.models) }), h('span', { text: 'ended ' + agoShort(g.ended_seconds_ago) })]));
+    });
+    return box;
+  }
 
   function renderKeys() {
     var list = $('keys');
@@ -180,94 +360,56 @@ const JS = String.raw`
     ]));
     state.keys.forEach(function (k) {
       var used = usedToday(k);
-      var meter = null;
       var usage;
       if (used === null) usage = h('div', { class: 'muted', text: 'Not tracked' });
       else if (k.daily_token_limit) {
         var pct = Math.min(100, Math.round(used / k.daily_token_limit * 100));
         var cls = 'meter' + (used >= k.daily_token_limit ? ' over' : pct >= 80 ? ' warn' : '');
-        meter = h('div', { class: cls, role: 'img', 'aria-label': pct + ' percent of the daily limit used' }, [h('span', { style: 'width:' + pct + '%' })]);
+        var meter = h('div', { class: cls, role: 'img', 'aria-label': pct + ' percent of the daily limit used' }, [h('span', { style: 'width:' + pct + '%' })]);
         usage = h('div', {}, [h('div', { title: full(used) + ' of ' + full(k.daily_token_limit), text: short(used) + ' of ' + short(k.daily_token_limit) + ' today' }), meter]);
       } else usage = h('div', {}, [h('div', { title: full(used), text: short(used) + ' today \u00b7 no cap' })]);
 
-      var chips = h('div', { class: 'chips' }, k.models.map(function (m) { return h('span', { class: 'chip', text: m === '*' ? 'Any model' : m }); }));
+      var chips = h('div', { class: 'chips' }, k.models.map(function (m) { return h('span', { class: 'chip', text: m === '*' ? 'Any model' : nameOf(m) }); }));
+      var modelsCell = h('div', {}, [chips, grantPills(k)]);
       var status = h('div', {}, [
         h('span', { class: 'badge ' + (k.disabled ? 'disabled' : 'active'), text: k.disabled ? 'Disabled' : 'Active' }),
         k.admin ? h('span', { class: 'badge admin', text: 'Admin' }) : null
       ]);
+      var canGrant = k.models.indexOf('*') === -1;
       var actions = h('div', { class: 'row-actions' }, [
         h('button', { type: 'button', text: 'Edit', onclick: function () { openForm(k); } }),
+        canGrant ? h('button', { type: 'button', text: 'Give access', title: 'Give temporary access to more models', onclick: function () { openGrant(k); } }) : null,
         h('button', { type: 'button', text: k.disabled ? 'Enable' : 'Disable', onclick: function () { toggle(k); } }),
         h('button', { type: 'button', class: 'danger', text: 'Delete', onclick: function () { remove(k); } })
       ]);
       list.appendChild(h('div', { class: 'krow' }, [
         h('div', { class: 'name' }, [k.name, h('div', { class: 'suffix', text: 'key ends in ' + k.key_suffix })]),
-        chips, usage, status, actions
+        modelsCell, usage, status, actions
       ]));
     });
   }
 
-  function discoveredModels(extra) {
-    var seen = {};
-    var out = [];
-    function add(m) { if (m && m !== '*' && m !== 'unknown' && !seen[m]) { seen[m] = true; out.push(m); } }
-    state.keys.forEach(function (k) { k.models.forEach(add); });
-    if (state.usage) state.usage.rows.forEach(function (r) { add(r.model); });
-    (extra || []).forEach(add);
-    return out.sort();
-  }
-
   function openForm(key) {
+    closeGrant();
     state.editing = key || null;
     var form = $('key-form');
     $('form-title').textContent = key ? 'Edit ' + key.name : 'Add a key';
     $('f-name').value = key ? key.name : '';
     $('f-name').disabled = !!key;
     $('f-cap').value = key && key.daily_token_limit ? key.daily_token_limit : '';
-    $('f-any').checked = !!key && key.models.indexOf('*') !== -1;
-    renderModelBoxes(key ? key.models.filter(function (m) { return m !== '*'; }) : []);
+    keyModels.setOptions(catalogOptions());
+    keyModels.set(key ? key.models : []);
     $('f-save').textContent = key ? 'Save changes' : 'Create key';
     $('secret-panel').hidden = true;
     form.hidden = false;
-    syncAny();
     (key ? $('f-cap') : $('f-name')).focus();
     form.scrollIntoView({ block: 'nearest' });
   }
-  function closeForm() { $('key-form').hidden = true; state.editing = null; }
-
-  function renderModelBoxes(selected) {
-    var box = $('f-models');
-    clear(box);
-    discoveredModels(selected).forEach(function (m) {
-      var cb = h('input', { type: 'checkbox', value: m });
-      cb.checked = selected.indexOf(m) !== -1;
-      box.appendChild(h('label', {}, [cb, m]));
-    });
-    if (!box.firstChild) box.appendChild(h('p', { class: 'hint', text: 'No models seen yet. Add one below.' }));
-  }
-  function syncAny() {
-    var any = $('f-any').checked;
-    Array.prototype.forEach.call($('f-models').querySelectorAll('input'), function (cb) { cb.disabled = any; });
-    $('f-other').disabled = any;
-    $('f-other-add').disabled = any;
-  }
-  function selectedModels() {
-    if ($('f-any').checked) return ['*'];
-    return Array.prototype.filter.call($('f-models').querySelectorAll('input'), function (cb) { return cb.checked; }).map(function (cb) { return cb.value; });
-  }
-  function addOtherModel() {
-    var name = $('f-other').value.trim();
-    if (!name) return;
-    var current = selectedModels();
-    if (current.indexOf(name) === -1) current.push(name);
-    renderModelBoxes(current);
-    $('f-other').value = '';
-    syncAny();
-  }
+  function closeForm() { $('key-form').hidden = true; state.editing = null; keyModels.close(); }
 
   function submitForm(ev) {
     ev.preventDefault();
-    var models = selectedModels();
+    var models = keyModels.get();
     if (!models.length) { say('Pick at least one model, or choose Any model.', 'error'); return; }
     var capText = $('f-cap').value.trim();
     var cap = capText === '' ? null : Number(capText);
@@ -323,12 +465,121 @@ const JS = String.raw`
       .then(function () { say('Deleted ' + k.name + '.', 'ok'); return refresh(); }).catch(fail);
   }
 
+  // ---- Temporary access ----
+  var grantState = { minutes: 120, custom: false };
+  function grantMinutes() {
+    if (!grantState.custom) return grantState.minutes;
+    var n = Number($('g-custom').value);
+    var unit = Number($('g-unit').value);
+    return n > 0 ? Math.round(n * unit) : NaN;
+  }
+  function renderDurations() {
+    var seg = $('g-presets');
+    clear(seg);
+    PRESETS.forEach(function (p) {
+      seg.appendChild(h('button', { type: 'button', text: p.label, 'aria-pressed': String(!grantState.custom && grantState.minutes === p.minutes), onclick: function () { grantState.custom = false; grantState.minutes = p.minutes; renderDurations(); } }));
+    });
+    seg.appendChild(h('button', { type: 'button', text: 'Custom', 'aria-pressed': String(grantState.custom), onclick: function () { grantState.custom = true; renderDurations(); $('g-custom').focus(); } }));
+    $('g-custom-row').hidden = !grantState.custom;
+    updatePreview();
+  }
+  function updatePreview() {
+    var m = grantMinutes();
+    var el = $('g-preview');
+    if (!(m >= 1 && m <= 10080)) { el.textContent = grantState.custom ? 'Enter a length from 1 minute to 7 days.' : ''; return; }
+    var end = new Date(Date.now() + m * 60000);
+    el.textContent = 'Access ends ' + end.toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) + ' (' + left(m * 60).replace(' left', '') + ' from now).';
+  }
+  function openGrant(k) {
+    closeForm();
+    state.granting = k;
+    $('grant-title').textContent = 'Give ' + k.name + ' temporary access';
+    var have = {};
+    k.models.forEach(function (m) { have[m.toLowerCase()] = true; });
+    grantModels.setOptions(catalogOptions().filter(function (o) { return !have[o.value.toLowerCase()]; }));
+    grantModels.set([]);
+    grantState.custom = false; grantState.minutes = 120;
+    $('g-custom').value = '3'; $('g-unit').value = '60'; $('g-note').value = '';
+    renderDurations();
+    $('secret-panel').hidden = true;
+    $('grant-form').hidden = false;
+    $('grant-form').scrollIntoView({ block: 'nearest' });
+    $('g-models-btn').focus();
+  }
+  function closeGrant() { $('grant-form').hidden = true; state.granting = null; grantModels.close(); }
+  function submitGrant(ev) {
+    ev.preventDefault();
+    var k = state.granting;
+    if (!k) return;
+    var models = grantModels.get();
+    if (!models.length) { say('Choose at least one model to unlock.', 'error'); return; }
+    var minutes = grantMinutes();
+    if (!(minutes >= 1 && minutes <= 10080)) { say('Choose how long: from 1 minute to 7 days.', 'error'); return; }
+    var btn = $('g-save');
+    btn.disabled = true;
+    api('POST', '/admin/keys/' + encodeURIComponent(k.name) + '/grants', { models: models, minutes: minutes, note: $('g-note').value.trim() || undefined })
+      .then(function (res) {
+        closeGrant();
+        say(k.name + ' can use ' + namesOf(models) + ' for ' + left(res.grant.seconds_left).replace(' left', '') + '.', 'ok');
+        return refresh();
+      }).catch(fail).then(function () { btn.disabled = false; });
+  }
+  function revokeGrant(k, g) {
+    if (!window.confirm('End ' + k.name + "'s access to " + namesOf(g.models) + ' now?')) return;
+    api('DELETE', '/admin/keys/' + encodeURIComponent(k.name) + '/grants/' + encodeURIComponent(g.id))
+      .then(function () { say('Ended ' + k.name + "'s access to " + namesOf(g.models) + '.', 'ok'); return refresh(); }).catch(fail);
+  }
+
+  // ---- Models ----
+  function accessSelect(current, onChange) {
+    var sel = h('select', { 'aria-label': 'Who is it listed for' }, [
+      h('option', { value: 'standard', text: 'Keys that can use it' }),
+      h('option', { value: 'on_request', text: 'Everyone, marked on request' })
+    ]);
+    sel.value = current;
+    sel.addEventListener('change', function () { onChange(sel.value); });
+    return sel;
+  }
+  function renderModels() {
+    var box = $('models');
+    clear(box);
+    $('models-note').textContent = state.modelSource === 'default' ? 'Using the built-in list. Change it and your list is saved.' : '';
+    box.appendChild(h('div', { class: 'mrow head', 'aria-hidden': 'true' }, [h('div', { text: 'Name' }), h('div', { text: 'Model id' }), h('div', { text: 'Listed in OpenCode for' }), h('div', { text: '' })]));
+    state.models.forEach(function (m) {
+      var sel = accessSelect(m.access, function (value) {
+        api('POST', '/admin/models', { id: m.id, name: m.name, access: value })
+          .then(function () { say(m.name + ' is now listed for ' + (value === 'on_request' ? 'everyone, marked on request' : 'keys that can use it') + '.', 'ok'); return refresh(); }).catch(fail);
+      });
+      var rm = h('button', { type: 'button', class: 'danger', text: 'Remove', 'aria-label': 'Remove ' + m.name, onclick: function () {
+        if (!window.confirm('Remove ' + m.name + ' from the list? Keys that already have it keep working; it just stops being offered here.')) return;
+        api('DELETE', '/admin/models/' + encodeURIComponent(m.id)).then(function () { say('Removed ' + m.name + '.', 'ok'); return refresh(); }).catch(fail);
+      } });
+      box.appendChild(h('div', { class: 'mrow' }, [h('div', { class: 'name', text: m.name }), h('div', { class: 'muted', text: m.id }), sel, rm]));
+    });
+    if (!state.models.length) box.appendChild(h('p', { class: 'empty', text: 'No models yet. Add one below.' }));
+  }
+  function submitModel(ev) {
+    ev.preventDefault();
+    var id = $('m-id').value.trim(), name = $('m-name').value.trim();
+    if (!id) { say('Enter the model id, for example claude-opus-5-5.', 'error'); return; }
+    var btn = $('m-add');
+    btn.disabled = true;
+    api('POST', '/admin/models', { id: id, name: name || id, access: $('m-access').value })
+      .then(function () { $('m-id').value = ''; $('m-name').value = ''; say('Added ' + (name || id) + '.', 'ok'); return refresh(); })
+      .catch(fail).then(function () { btn.disabled = false; });
+  }
+
+  // ---- Usage ----
   function renderUsage() {
     var u = state.usage;
     var people = $('by-person');
     var details = $('details');
     clear(people); clear(details);
-    if (!u || !u.rows.length) {
+    if (!u) {
+      people.appendChild(h('p', { class: 'empty', text: 'Usage tracking is turned off on this relay.' }));
+      return;
+    }
+    if (!u.rows.length) {
       people.appendChild(h('p', { class: 'empty', text: 'No usage recorded in this period.' }));
       return;
     }
@@ -345,21 +596,39 @@ const JS = String.raw`
 
   function setDays(n) {
     state.days = n;
-    Array.prototype.forEach.call(document.querySelectorAll('.seg button'), function (b) { b.setAttribute('aria-pressed', String(Number(b.getAttribute('data-days')) === n)); });
+    Array.prototype.forEach.call(document.querySelectorAll('.seg[aria-label=Period] button'), function (b) { b.setAttribute('aria-pressed', String(Number(b.getAttribute('data-days')) === n)); });
     refresh();
   }
 
   function refresh() {
     $('refresh').disabled = true;
-    return Promise.all([api('GET', '/admin/keys'), api('GET', '/admin/usage?days=' + state.days)]).then(function (res) {
+    // Usage is optional: a relay with stats turned off answers 409 there, and that must not stop the keys from loading.
+    var usageReq = api('GET', '/admin/usage?days=' + state.days).catch(function (err) { if (err.status === 409) return null; throw err; });
+    return Promise.all([api('GET', '/admin/keys'), usageReq, api('GET', '/admin/models')]).then(function (res) {
       state.keys = res[0].keys;
       state.usage = res[1];
+      state.models = res[2].models;
+      state.modelSource = res[2].source;
       renderKeys();
+      renderModels();
       renderUsage();
+      if (!$('key-form').hidden) keyModels.setOptions(catalogOptions());
       $('updated').textContent = 'Updated ' + new Date().toLocaleTimeString();
       $('loading').hidden = true;
     }).catch(function (err) { $('loading').hidden = true; fail(err); }).then(function () { $('refresh').disabled = false; });
   }
+
+  // Countdowns tick on their own; one refresh when a grant runs out so the row settles.
+  setInterval(function () {
+    var expired = false;
+    Array.prototype.forEach.call(document.querySelectorAll('[data-until]'), function (el) {
+      var sec = Math.round((Date.parse(el.getAttribute('data-until')) - Date.now()) / 1000);
+      el.textContent = left(sec);
+      if (sec <= 0) expired = true;
+    });
+    if (expired && !$('app').hidden) refresh();
+    if (!$('grant-form').hidden) updatePreview();
+  }, 15000);
 
   function enter(username) {
     $('password').value = '';
@@ -387,12 +656,14 @@ const JS = String.raw`
   $('add-key').addEventListener('click', function () { openForm(null); });
   $('f-cancel').addEventListener('click', closeForm);
   $('key-form').addEventListener('submit', submitForm);
-  $('f-any').addEventListener('change', syncAny);
-  $('f-other-add').addEventListener('click', addOtherModel);
-  $('f-other').addEventListener('keydown', function (ev) { if (ev.key === 'Enter') { ev.preventDefault(); addOtherModel(); } });
+  $('grant-form').addEventListener('submit', submitGrant);
+  $('g-cancel').addEventListener('click', closeGrant);
+  $('g-custom').addEventListener('input', updatePreview);
+  $('g-unit').addEventListener('change', updatePreview);
+  $('model-form').addEventListener('submit', submitModel);
   $('copy-btn').addEventListener('click', copySecret);
   $('secret-done').addEventListener('click', hideSecret);
-  Array.prototype.forEach.call(document.querySelectorAll('.seg button'), function (b) {
+  Array.prototype.forEach.call(document.querySelectorAll('.seg[aria-label=Period] button'), function (b) {
     b.addEventListener('click', function () { setDays(Number(b.getAttribute('data-days'))); });
   });
 
@@ -460,13 +731,9 @@ const BODY = String.raw`
               <p class="hint">Letters, numbers, dot, dash or underscore. Reports show this name.</p>
             </div>
             <div>
-              <label>Models this key can use</label>
-              <label class="anyrow"><input id="f-any" type="checkbox"> Any model</label>
-              <div id="f-models" class="models mt-s"></div>
-              <div class="inline mt-m">
-                <input id="f-other" type="text" placeholder="Another model name" aria-label="Another model name" autocomplete="off">
-                <button id="f-other-add" type="button">Add model</button>
-              </div>
+              <label id="f-models-label">Models this key can use</label>
+              <div id="f-models-slot"></div>
+              <p class="hint">Need a model for a limited time instead? Save the key, then use Give access on its row.</p>
             </div>
             <div>
               <label for="f-cap">Daily token limit</label>
@@ -481,8 +748,69 @@ const BODY = String.raw`
         </div>
       </form>
 
+      <form id="grant-form" hidden>
+        <div class="panel flat">
+          <h2 id="grant-title" class="mb"></h2>
+          <div class="form-grid">
+            <div>
+              <label id="g-models-label">Models to unlock</label>
+              <div id="g-models-slot"></div>
+            </div>
+            <div>
+              <label>For how long</label>
+              <div class="dur"><div id="g-presets" class="seg" role="group" aria-label="Duration"></div></div>
+              <div id="g-custom-row" class="dur-custom" hidden>
+                <input id="g-custom" type="number" min="1" step="1" inputmode="numeric" aria-label="Custom length">
+                <select id="g-unit" aria-label="Unit">
+                  <option value="1">minutes</option>
+                  <option value="60">hours</option>
+                  <option value="1440">days</option>
+                </select>
+              </div>
+              <div id="g-preview" class="preview" aria-live="polite"></div>
+            </div>
+            <div>
+              <label for="g-note">Note (optional)</label>
+              <input id="g-note" type="text" maxlength="200" placeholder="Why, for example: dashboard redesign" autocomplete="off">
+              <p class="hint">Saved with the grant and shown when you hover over it. They get their normal models back automatically when time runs out.</p>
+            </div>
+            <div class="form-actions">
+              <button id="g-save" class="primary" type="submit">Give access</button>
+              <button id="g-cancel" type="button">Cancel</button>
+            </div>
+          </div>
+        </div>
+      </form>
+
       <p id="loading" class="empty">Loading keys&hellip;</p>
       <div id="keys"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>Models</h2>
+      </div>
+      <p class="hint">These are the models you can give out and that teammates see in OpenCode. Keys can only use what you allow them, whatever is listed here.</p>
+      <p id="models-note" class="hint"></p>
+      <div id="models"></div>
+      <form id="model-form" class="madd">
+        <div>
+          <label for="m-id">Model id</label>
+          <input id="m-id" type="text" placeholder="claude-opus-5-5" autocomplete="off" spellcheck="false">
+        </div>
+        <div>
+          <label for="m-name">Name shown</label>
+          <input id="m-name" type="text" maxlength="80" placeholder="Claude Opus 5.5" autocomplete="off">
+        </div>
+        <div>
+          <label for="m-access">Listed in OpenCode for</label>
+          <select id="m-access">
+            <option value="on_request">Everyone, marked on request</option>
+            <option value="standard">Keys that can use it</option>
+          </select>
+        </div>
+        <button id="m-add" class="primary" type="submit">Add model</button>
+      </form>
     </section>
 
     <section class="panel">
