@@ -14,6 +14,36 @@ import { KEYS, startMockRelay } from "./helpers/mock-relay";
 
 const SETUP_DIR = path.resolve(__dirname, "..", "setup");
 const IS_WINDOWS = process.platform === "win32";
+const TEST_DATE = "2026-10-28";
+const dayOffset = (days: number) =>
+  new Date(Date.parse(TEST_DATE) + days * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+
+// OpenCode 2.x lists a model in its picker only when it is released within about six months and is the newest of
+// its family for that provider. Copied from the app's own rule so a regression here shows up in CI.
+const SIX_MONTHS_MS = 6 * 30.436875 * 24 * 60 * 60 * 1000;
+function modelsTheAppWouldShow(
+  cfg: any,
+  providerId: string,
+  now: number,
+): string[] {
+  const models = Object.entries(cfg.providers?.[providerId]?.models ?? {}) as [
+    string,
+    any,
+  ][];
+  const recent = models.filter(
+    ([, m]) => Math.abs(now - Date.parse(m.releaseDate)) < SIX_MONTHS_MS,
+  );
+  const newestPerFamily = new Map<string, [string, any]>();
+  for (const entry of recent) {
+    const family = String(entry[1].family);
+    const best = newestPerFamily.get(family);
+    if (!best || entry[1].releaseDate > best[1].releaseDate)
+      newestPerFamily.set(family, entry);
+  }
+  return [...newestPerFamily.values()].map(([id]) => id);
+}
 
 function which(cmd: string): string | null {
   try {
@@ -108,6 +138,7 @@ function run(
   relayUrl: string,
   key: string | undefined,
   args: string[] = [],
+  date = TEST_DATE,
 ) {
   const { cmd, args: argv } = r.command(args);
   const env: NodeJS.ProcessEnv = {
@@ -115,6 +146,7 @@ function run(
     XDG_CONFIG_HOME: sb.config,
     XDG_DATA_HOME: sb.data,
     RELAY_URL: relayUrl,
+    RELAY_RELEASE_DATE: date,
   };
   if (key !== undefined) env.RELAY_API_KEY = key;
   else delete env.RELAY_API_KEY;
@@ -303,6 +335,110 @@ for (const r of runners) {
     assert.deepEqual(
       readJson(path.join(path.dirname(sb.configFile), backups[0])),
       original,
+    );
+  });
+
+  test(`${r.name}: every relay model is switched on in OpenCode's model menu by default`, async (t) => {
+    const relay = await startMockRelay();
+    const sb = sandbox();
+    t.after(() => relay.close());
+    assert.equal((await run(r, sb, relay.url, KEYS.wide)).code, 0);
+    const cfg = readJson(sb.configFile);
+    const ids = Object.keys(cfg.provider["dozaldevs-relay"].models);
+    const entry = cfg.providers["dozaldevs-relay"].models;
+    assert.deepEqual(Object.keys(entry), ids);
+    for (const id of ids) {
+      assert.equal(entry[id].releaseDate, TEST_DATE, id);
+      assert.equal(entry[id].family, id, "each model is its own family");
+      assert.equal(
+        entry[id].name,
+        cfg.provider["dozaldevs-relay"].models[id].name,
+        "same display name in both blocks",
+      );
+    }
+    assert.deepEqual(
+      modelsTheAppWouldShow(
+        cfg,
+        "dozaldevs-relay",
+        Date.parse(TEST_DATE) + 3_600_000,
+      ).sort(),
+      [...ids].sort(),
+    );
+    assert.equal(
+      modelsTheAppWouldShow(
+        cfg,
+        "dozaldevs-relay",
+        Date.parse(TEST_DATE) + 400 * 86_400_000,
+      ).length,
+      0,
+      "and they age out",
+    );
+  });
+
+  test(`${r.name}: other providers in the new-style block are kept`, async (t) => {
+    const relay = await startMockRelay();
+    const sb = sandbox();
+    t.after(() => relay.close());
+    const mine = {
+      providers: {
+        acme: { name: "Acme", models: { x: { name: "X" } } },
+        "dozaldevs-relay": { models: { stale: { name: "Stale" } } },
+      },
+    };
+    fs.writeFileSync(sb.configFile, JSON.stringify(mine, null, 2));
+    assert.equal((await run(r, sb, relay.url, KEYS.luna)).code, 0);
+    const cfg = readJson(sb.configFile);
+    assert.deepEqual(cfg.providers.acme, mine.providers.acme);
+    assert.deepEqual(Object.keys(cfg.providers["dozaldevs-relay"].models), [
+      "gpt-6-luna",
+      "gpt-5.6-luna",
+    ]);
+  });
+
+  test(`${r.name}: --check warns before the models drop out of the menu, and after an old setup`, async (t) => {
+    const relay = await startMockRelay();
+    const sb = sandbox();
+    t.after(() => relay.close());
+    assert.equal((await run(r, sb, relay.url, KEYS.luna)).code, 0);
+
+    const fresh = await run(
+      r,
+      sb,
+      relay.url,
+      undefined,
+      [r.checkFlag],
+      dayOffset(149),
+    );
+    assert.equal(fresh.code, 0, fresh.out);
+    assert.match(fresh.out, /set to show in OpenCode's model menu/);
+
+    const stale = await run(
+      r,
+      sb,
+      relay.url,
+      undefined,
+      [r.checkFlag],
+      dayOffset(151),
+    );
+    assert.equal(stale.code, 1, stale.out);
+    assert.match(stale.out, /drop out of OpenCode's model menu/);
+    assert.match(stale.out, /Run the setup again/);
+
+    const cfg = readJson(sb.configFile);
+    delete cfg.providers;
+    fs.writeFileSync(sb.configFile, JSON.stringify(cfg, null, 2));
+    const oldStyle = await run(r, sb, relay.url, undefined, [r.checkFlag]);
+    assert.equal(oldStyle.code, 1, oldStyle.out);
+    assert.match(oldStyle.out, /out of date\. Run the setup again/);
+
+    assert.equal(
+      (await run(r, sb, relay.url, KEYS.luna, [], dayOffset(151))).code,
+      0,
+    );
+    assert.equal(
+      (await run(r, sb, relay.url, undefined, [r.checkFlag], dayOffset(151)))
+        .code,
+      0,
     );
   });
 

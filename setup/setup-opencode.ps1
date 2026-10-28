@@ -29,6 +29,8 @@ $ConfigFile = Join-Path (Join-Path $ConfigHome 'opencode') 'opencode.json'
 $KeyFile = Join-Path (Join-Path $DataHome 'opencode') 'dozaldevs-relay.key'
 $KeyFileForJson = $KeyFile.Replace('\', '/')
 $Stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$ReleaseDate = if ($env:RELAY_RELEASE_DATE) { $env:RELAY_RELEASE_DATE } else { (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd') }
+$StaleDays = 150
 $Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 function Say([string]$Text) { Write-Host $Text }
@@ -119,6 +121,12 @@ function Update-Config([string[]]$Allowed) {
     if ($existing.Count -eq 0 -or $existing[0].Value -isnot [System.Management.Automation.PSCustomObject]) { Set-Prop $cfg 'provider' (New-Object psobject) }
     Set-Prop $cfg.provider $ProviderId $provider
 
+    $pm = New-Object psobject
+    foreach ($m in $Allowed) { Add-Member -InputObject $pm -NotePropertyName $m -NotePropertyValue ([pscustomobject][ordered]@{ name = (Get-PrettyName $m); family = $m; releaseDate = $ReleaseDate }) }
+    $existingProviders = $cfg.PSObject.Properties.Match('providers')
+    if ($existingProviders.Count -eq 0 -or $existingProviders[0].Value -isnot [System.Management.Automation.PSCustomObject]) { Set-Prop $cfg 'providers' (New-Object psobject) }
+    Set-Prop $cfg.providers $ProviderId ([pscustomobject]@{ models = $pm })
+
     $notes = @()
     $current = ''
     $m0 = $cfg.PSObject.Properties.Match('model')
@@ -198,6 +206,16 @@ function Main {
         if (-not $text.Contains("`"$ProviderId`"")) { Die 'OpenCode is not set up for the relay yet. Run the setup first (without -Check).' }
         if (-not $text.Contains("{file:$KeyFileForJson}")) { Die "OpenCode's settings do not point at your saved key. Run the setup again (without -Check)." }
         Ok "OpenCode's settings point at your saved key."
+        $loaded = Read-JsonFile $ConfigFile
+        $rec = $null
+        $pp = $loaded.Obj.PSObject.Properties.Match('providers')
+        if ($pp.Count -gt 0 -and $pp[0].Value -is [System.Management.Automation.PSCustomObject]) { $rp = $pp[0].Value.PSObject.Properties.Match($ProviderId); if ($rp.Count -gt 0) { $rec = $rp[0].Value } }
+        $date = $null
+        if ($null -ne $rec -and $null -ne $rec.models) { foreach ($mp in $rec.models.PSObject.Properties) { if ($mp.Value.releaseDate) { $date = $mp.Value.releaseDate; break } } }
+        if (-not $date) { Die "OpenCode's model menu entries are out of date. Run the setup again (without -Check)." }
+        $age = ([datetime]::Parse($ReleaseDate, [Globalization.CultureInfo]::InvariantCulture) - [datetime]::Parse($date, [Globalization.CultureInfo]::InvariantCulture)).Days
+        if ($age -gt $StaleDays) { Die "the relay's models will drop out of OpenCode's model menu soon (set up $age days ago). Run the setup again (without -Check) to refresh them." }
+        Ok "The relay's models are set to show in OpenCode's model menu."
         Say ''
         Say "Check passed. Models you can use: $allowedText"
         return
