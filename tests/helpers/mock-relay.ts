@@ -33,24 +33,44 @@ export async function startMockRelay(): Promise<MockRelay> {
       try {
         body = raw ? JSON.parse(raw) : {};
       } catch {}
-      calls.push({ method: req.method || "", path: req.url || "", model: body.model });
+      calls.push({
+        method: req.method || "",
+        path: req.url || "",
+        model: body.model,
+      });
       if (req.url === "/health") return json(200, { status: "ok" });
       if (!key) return json(401, { error: { message: "Missing API key" } });
       const known = Object.values(KEYS).includes(key as any);
       if (!known) return json(403, { error: { message: "Invalid API key" } });
-      if (key === KEYS.off) return json(403, { error: { message: "API key disabled" } });
-      if (req.url === "/v1/models" && req.method === "GET") return json(200, { object: "list", data: [] });
+      if (key === KEYS.off)
+        return json(403, { error: { message: "API key disabled" } });
+      if (req.url === "/v1/models" && req.method === "GET")
+        return json(200, { object: "list", data: [] });
       if (req.url === "/v1/chat/completions" && req.method === "POST") {
         const allowed = key === KEYS.wide ? WIDE : LUNA;
         const model = String(body.model || "");
         if (NOT_SERVED.includes(model)) {
-          return json(400, { error: { message: `The '${model}' model is not supported when using Codex with a ChatGPT account.` } });
+          return json(400, {
+            error: {
+              message: `The '${model}' model is not supported when using Codex with a ChatGPT account.`,
+            },
+          });
         }
         if (!allowed.includes(model)) {
-          return json(403, { error: { message: `model "${model}" is not enabled for this key`, type: "model_not_allowed" } });
+          return json(403, {
+            error: {
+              message: `model "${model}" is not enabled for this key`,
+              type: "model_not_allowed",
+            },
+          });
         }
         if (key === KEYS.capped) {
-          return json(429, { error: { message: "daily token limit reached for this key", type: "daily_token_limit" } });
+          return json(429, {
+            error: {
+              message: "daily token limit reached for this key",
+              type: "daily_token_limit",
+            },
+          });
         }
         if (body.stream) {
           res.writeHead(200, { "content-type": "text/event-stream" });
@@ -59,7 +79,9 @@ export async function startMockRelay(): Promise<MockRelay> {
           res.write(chunk({ role: "assistant", content: "" }, null));
           res.write(chunk({ content: "relay works" }, null));
           res.write(chunk({}, "stop"));
-          res.write(`data: ${JSON.stringify({ id: "c1", object: "chat.completion.chunk", created: 1, model, choices: [], usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 } })}\n\n`);
+          res.write(
+            `data: ${JSON.stringify({ id: "c1", object: "chat.completion.chunk", created: 1, model, choices: [], usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 } })}\n\n`,
+          );
           res.end("data: [DONE]\n\n");
           return;
         }
@@ -68,7 +90,13 @@ export async function startMockRelay(): Promise<MockRelay> {
           object: "chat.completion",
           created: 1,
           model,
-          choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+          choices: [
+            {
+              index: 0,
+              message: { role: "assistant", content: "ok" },
+              finish_reason: "stop",
+            },
+          ],
           usage: { prompt_tokens: 5, completion_tokens: 1, total_tokens: 6 },
         });
       }
