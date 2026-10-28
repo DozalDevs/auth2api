@@ -10,6 +10,7 @@ FROM node:20-alpine
 WORKDIR /app
 COPY --from=builder /app/dist dist/
 COPY --from=builder /app/node_modules node_modules/
+COPY setup/ setup/
 COPY package.json ./
 EXPOSE 8317
 VOLUME ["/data", "/config"]

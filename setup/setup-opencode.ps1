@@ -1,0 +1,239 @@
+# Connects OpenCode (the desktop app and the command line tool) on this Windows computer to the
+# DozalDevs ChatGPT relay, using the personal API key you were given.
+#
+# Run it:       paste the one-line command you were given into PowerShell
+# Check later:  the same command with -Check on the end (changes nothing; proves your key and models work)
+# Re-run it any time: it updates the setup in place (for example after you are given more models).
+#
+# What it changes, and nothing else:
+#   ~\.config\opencode\opencode.json            adds a "dozaldevs-relay" provider (other settings are kept)
+#   ~\.local\share\opencode\dozaldevs-relay.key your key, in a file only you can read
+# The settings file is backed up next to the original before it is changed.
+
+param([switch]$Check)
+
+$ErrorActionPreference = 'Stop'
+try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
+
+$RelayUrlDefault = '__RELAY_URL__'
+if ($RelayUrlDefault.StartsWith('__')) { $RelayUrlDefault = 'https://dozaldevs-codex-relay-2.fly.dev' }
+$RelayUrl = if ($env:RELAY_URL) { $env:RELAY_URL } else { $RelayUrlDefault }
+$RelayUrl = $RelayUrl.TrimEnd('/')
+$ProviderId = 'dozaldevs-relay'
+$ProviderName = 'DozalDevs ChatGPT Relay'
+$Candidates = @('gpt-6-luna', 'gpt-5.6-luna', 'gpt-6-sol', 'gpt-5.6-sol', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-astra')
+
+$ConfigHome = if ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { Join-Path $HOME '.config' }
+$DataHome = if ($env:XDG_DATA_HOME) { $env:XDG_DATA_HOME } else { Join-Path $HOME '.local/share' }
+$ConfigFile = Join-Path (Join-Path $ConfigHome 'opencode') 'opencode.json'
+$KeyFile = Join-Path (Join-Path $DataHome 'opencode') 'dozaldevs-relay.key'
+$KeyFileForJson = $KeyFile.Replace('\', '/')
+$Stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$Utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+
+function Say([string]$Text) { Write-Host $Text }
+function Ok([string]$Text) { Write-Host "[ok] $Text" }
+function Warn([string]$Text) { Write-Host "[!]  $Text" }
+function Die([string]$Text) {
+    if ($Check) { throw "`nCheck failed: $Text" }
+    throw "`nSetup stopped: $Text`nNothing was changed."
+}
+
+function Invoke-Relay([string]$Method, [string]$Path, [string]$Json) {
+    $req = [System.Net.HttpWebRequest]::Create($RelayUrl + $Path)
+    $req.Method = $Method
+    $req.UserAgent = 'dozaldevs-opencode-setup'
+    $req.Headers.Add('Authorization', "Bearer $script:Key")
+    $req.Timeout = if ($Json) { 90000 } else { 30000 }
+    if ($Json) {
+        $bytes = [Text.Encoding]::UTF8.GetBytes($Json)
+        $req.ContentType = 'application/json'
+        $req.ContentLength = $bytes.Length
+        $stream = $req.GetRequestStream()
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Close()
+    }
+    $res = $null
+    try { $res = $req.GetResponse() }
+    catch [System.Net.WebException] { $res = $_.Exception.Response }
+    if ($null -eq $res) { return @{ Status = 0; Body = '' } }
+    $reader = New-Object System.IO.StreamReader($res.GetResponseStream())
+    $body = $reader.ReadToEnd()
+    $reader.Close()
+    $status = [int]$res.StatusCode
+    $res.Close()
+    return @{ Status = $status; Body = $body }
+}
+
+function Get-RelayMessage([string]$Body) {
+    if ($Body -match '"message"\s*:\s*"([^"]*)"') { return $Matches[1] }
+    return ''
+}
+
+function Read-JsonFile([string]$Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return @{ Raw = $null; Obj = (New-Object psobject) } }
+    $raw = [System.IO.File]::ReadAllText($Path)
+    if ($raw.Trim() -eq '') { return @{ Raw = $raw; Obj = (New-Object psobject) } }
+    $obj = $null
+    try { $obj = $raw | ConvertFrom-Json } catch { Die "$Path is not plain JSON (it may have comments in it), so I did not touch it. Ask the engineering team for help." }
+    if ($null -eq $obj -or $obj -isnot [System.Management.Automation.PSCustomObject]) {
+        Die "$Path is not plain JSON (it may have comments in it), so I did not touch it. Ask the engineering team for help."
+    }
+    return @{ Raw = $raw; Obj = $obj }
+}
+
+function Set-Prop($Object, [string]$Name, $Value) {
+    if ($Object.PSObject.Properties.Match($Name).Count -gt 0) { $Object.$Name = $Value }
+    else { Add-Member -InputObject $Object -NotePropertyName $Name -NotePropertyValue $Value }
+}
+
+function Get-PrettyName([string]$Id) {
+    $parts = $Id.Split('-')
+    $head = ($parts[0..([Math]::Min(1, $parts.Length - 1))] -join '-').ToUpper()
+    $rest = @()
+    if ($parts.Length -gt 2) { $rest = $parts[2..($parts.Length - 1)] | ForEach-Object { $_.Substring(0, 1).ToUpper() + $_.Substring(1) } }
+    return (@($head) + $rest) -join ' '
+}
+
+function Save-JsonFile([string]$Path, $Loaded, [string]$Backup, $Object) {
+    $text = ($Object | ConvertTo-Json -Depth 32) + "`n"
+    if ($Loaded.Raw -ceq $text) { return 'unchanged' }
+    if ($null -ne $Loaded.Raw) { [System.IO.File]::WriteAllText($Backup, $Loaded.Raw, $Utf8NoBom) }
+    [System.IO.File]::WriteAllText($Path, $text, $Utf8NoBom)
+    if ($null -eq $Loaded.Raw) { return 'created' }
+    return 'updated'
+}
+
+function Update-Config([string[]]$Allowed) {
+    $loaded = Read-JsonFile $ConfigFile
+    $cfg = $loaded.Obj
+    $models = New-Object psobject
+    foreach ($m in $Allowed) { Add-Member -InputObject $models -NotePropertyName $m -NotePropertyValue ([pscustomobject]@{ name = (Get-PrettyName $m) }) }
+    $provider = [pscustomobject][ordered]@{
+        npm     = '@ai-sdk/openai-compatible'
+        name    = $ProviderName
+        options = [pscustomobject][ordered]@{ baseURL = "$RelayUrl/v1"; apiKey = "{file:$KeyFileForJson}" }
+        models  = $models
+    }
+    $existing = $cfg.PSObject.Properties.Match('provider')
+    if ($existing.Count -eq 0 -or $existing[0].Value -isnot [System.Management.Automation.PSCustomObject]) { Set-Prop $cfg 'provider' (New-Object psobject) }
+    Set-Prop $cfg.provider $ProviderId $provider
+
+    $notes = @()
+    $current = ''
+    $m0 = $cfg.PSObject.Properties.Match('model')
+    if ($m0.Count -gt 0 -and $m0[0].Value -is [string]) { $current = $m0[0].Value }
+    $ours = $current.StartsWith("$ProviderId/")
+    if ($current -eq '' -or ($ours -and ($Allowed -notcontains $current.Substring($ProviderId.Length + 1)))) { Set-Prop $cfg 'model' "$ProviderId/$($Allowed[0])" }
+    elseif (-not $ours) { $notes += 'kept-model' }
+
+    $ep = $cfg.PSObject.Properties.Match('enabled_providers')
+    if ($ep.Count -gt 0 -and $ep[0].Value -is [array] -and ($ep[0].Value -notcontains $ProviderId)) { $cfg.enabled_providers = @($ep[0].Value) + $ProviderId }
+    $dp = $cfg.PSObject.Properties.Match('disabled_providers')
+    if ($dp.Count -gt 0 -and $dp[0].Value -is [array] -and ($dp[0].Value -contains $ProviderId)) { $cfg.disabled_providers = @($dp[0].Value | Where-Object { $_ -ne $ProviderId }) }
+
+    if ($cfg.PSObject.Properties.Match('$schema').Count -eq 0) {
+        $ordered = [ordered]@{ '$schema' = 'https://opencode.ai/config.json' }
+        foreach ($p in $cfg.PSObject.Properties) { $ordered[$p.Name] = $p.Value }
+        $cfg = [pscustomobject]$ordered
+    }
+    $result = Save-JsonFile $ConfigFile $loaded "$ConfigFile.bak-$Stamp" $cfg
+    return (@($result) + $notes) -join ' '
+}
+
+function Main {
+    # ---- 1. Get the key (typed into a hidden prompt; never on a command line) ----
+    $script:Key = ''
+    if ($Check) {
+        if (-not (Test-Path -LiteralPath $KeyFile)) { Die "no saved key at $KeyFile. Run the setup first (without -Check)." }
+        $script:Key = [System.IO.File]::ReadAllText($KeyFile)
+    }
+    elseif ($env:RELAY_API_KEY) { $script:Key = $env:RELAY_API_KEY }
+    else {
+        try { $secure = Read-Host 'Paste your relay API key (nothing shows as you type), then press Enter' -AsSecureString }
+        catch { Die 'no way to ask for your key here. Run this in a PowerShell window, or set RELAY_API_KEY.' }
+        $ptr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
+        try { $script:Key = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr) }
+        finally { [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }
+    }
+    $script:Key = $script:Key -replace '\s', ''
+    if ($script:Key -eq '') { Die 'no key entered.' }
+    if ($script:Key.Length -lt 16) { Die 'that does not look like a full key (too short). Copy the whole thing.' }
+
+    # ---- 2. Make sure we can safely edit the settings file before talking to the relay ----
+    if (-not $Check) { $null = Read-JsonFile $ConfigFile }
+
+    # ---- 3. Check the key works ----
+    Say 'Checking your key with the relay...'
+    $r = Invoke-Relay 'GET' '/v1/models' ''
+    switch ($r.Status) {
+        200 { Ok 'The relay accepted your key.' }
+        0 { Die "could not reach $RelayUrl. Check your internet connection and try again." }
+        { $_ -in 401, 403 } { Die "the relay rejected your key ($(Get-RelayMessage $r.Body)). Ask the engineering team for a new one, and make sure you copied all of it." }
+        default { Die "the relay answered with an unexpected error (HTTP $($r.Status)). Try again in a minute." }
+    }
+
+    # ---- 4. Find out which models this key may use ----
+    Say 'Finding the models your key can use (this takes a few seconds)...'
+    $allowed = @()
+    foreach ($model in $Candidates) {
+        $payload = '{"model":"' + $model + '","messages":[{"role":"user","content":"Reply with exactly: ok"}]}'
+        $r = Invoke-Relay 'POST' '/v1/chat/completions' $payload
+        if ($r.Status -eq 200) { $allowed += $model; Ok $model }
+        elseif ($r.Status -eq 429) { $allowed += $model; Warn "${model}: your daily limit is used up for today; it will work again after midnight UTC." }
+        elseif ($r.Status -eq 403) {
+            if ($r.Body -like '*model_not_allowed*') { Say "     ${model}: not enabled for your key (skipped)" }
+            else { Die "the relay rejected your key ($(Get-RelayMessage $r.Body))." }
+        }
+        elseif ($r.Status -eq 0) { Die 'lost the connection to the relay while testing models. Try again.' }
+        else { Say "     ${model}: not available right now (skipped)" }
+    }
+    if ($allowed.Count -eq 0) { Die 'your key is not allowed to use any model yet. Ask the engineering team to enable one.' }
+    $allowedText = $allowed -join ' '
+
+    # ---- Check mode stops here: confirm the settings point at the key, change nothing ----
+    if ($Check) {
+        if (-not (Test-Path -LiteralPath $ConfigFile)) { Die "no OpenCode settings at $ConfigFile. Run the setup first (without -Check)." }
+        $text = [System.IO.File]::ReadAllText($ConfigFile)
+        if (-not $text.Contains("`"$ProviderId`"")) { Die 'OpenCode is not set up for the relay yet. Run the setup first (without -Check).' }
+        if (-not $text.Contains("{file:$KeyFileForJson}")) { Die "OpenCode's settings do not point at your saved key. Run the setup again (without -Check)." }
+        Ok "OpenCode's settings point at your saved key."
+        Say ''
+        Say "Check passed. Models you can use: $allowedText"
+        return
+    }
+
+    # ---- 5. Save the key (private file) and write the settings ----
+    $null = New-Item -ItemType Directory -Force -Path (Split-Path $ConfigFile), (Split-Path $KeyFile)
+    $keyResult = 'created'
+    if (Test-Path -LiteralPath $KeyFile) {
+        if ([System.IO.File]::ReadAllText($KeyFile) -ceq $script:Key) { $keyResult = 'unchanged' } else { $keyResult = 'updated' }
+    }
+    if ($keyResult -ne 'unchanged') { [System.IO.File]::WriteAllText($KeyFile, $script:Key, $Utf8NoBom) }
+    try {
+        if ($env:OS -eq 'Windows_NT') { $null = & icacls.exe $KeyFile /inheritance:r /grant:r "$($env:USERNAME):(R,W)" 2>&1 }
+        else { $null = & chmod 600 $KeyFile 2>&1 }
+    } catch {}
+
+    $configResult = Update-Config $allowed
+    Ok "OpenCode settings: $($configResult.Split(' ')[0]) ($ConfigFile)"
+    Ok "Your key: $keyResult (private file $KeyFile)"
+    if ($configResult -like '*kept-model*') { Say "     Your existing default model was left as it was; pick the relay's models from the model menu." }
+
+    # ---- 6. Tell them what to do next ----
+    Say ''
+    Say "All set. Models you can use: $allowedText"
+    Say "Default model: $ProviderId/$($allowed[0])"
+    Say ''
+    $running = $false
+    try { $running = [bool](Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -like 'OpenCode*' }) } catch {}
+    if ($running) { Say 'OpenCode is open right now. Close it completely and open it again to pick up the change.' }
+    else { Say 'Open OpenCode and start chatting. It is already connected.' }
+    Say 'To double-check later, run the same command again with -Check on the end. If something does not work, send the engineering team what it prints (it never prints your key).'
+}
+
+try { Main }
+catch {
+    [Console]::Error.WriteLine($_.Exception.Message)
+    if ($PSCommandPath) { exit 1 }
+}
