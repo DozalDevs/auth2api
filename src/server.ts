@@ -17,6 +17,7 @@ import { KeyStore } from "./keys/store";
 import { registerKeyRoutes, utcDay } from "./keys/routes";
 import { ApiKeyEntry } from "./config";
 import { DASHBOARD_CSP, DASHBOARD_HTML } from "./ui/dashboard";
+import { registerSetupRoutes } from "./setup/routes";
 import {
   LoginThrottle,
   SESSION_COOKIE,
@@ -187,6 +188,8 @@ export function createServer(
     });
     next();
   };
+
+  registerSetupRoutes(app);
 
   // Health check (no account count to avoid info leak)
   app.get("/health", (_req, res) => {
