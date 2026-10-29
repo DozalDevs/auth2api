@@ -84,6 +84,20 @@ export interface KeyGrant {
 export type ModelAccess = "standard" | "on_request";
 
 /**
+ * Special entry for a key's `models` list: every model the model list marks
+ * "standard", now and whenever the list changes. Keeps "cheap models by
+ * default, the rest on request" true without editing every key.
+ */
+export const STANDARD_GROUP = "@standard";
+
+/** OpenCode Go: a pool of API keys, one per Go subscription. */
+export interface OpenCodeGoConfig {
+  keys: string[];
+  /** Default https://opencode.ai/inference/go. Tests point it at a stand-in. */
+  "base-url"?: string;
+}
+
+/**
  * A model the relay can serve, as the admin UI and the setup scripts see it.
  * `on_request` models are listed (labelled) for every key so access can be
  * granted later without anyone re-running setup.
@@ -106,6 +120,7 @@ export interface Config {
   "api-keys": ApiKeyEntry[];
   "dashboard-users"?: DashboardUser[];
   models?: CatalogModel[];
+  "opencode-go"?: OpenCodeGoConfig;
   "body-limit": string;
   cloaking: CloakingConfig;
   timeouts: TimeoutConfig;
@@ -232,6 +247,39 @@ export function validateCatalogModel(m: unknown, where: string): CatalogModel {
     throw new Error(`${where}: access must be "standard" or "on_request"`);
   }
   return { id: o.id, name: o.name.trim(), access };
+}
+
+export function validateOpenCodeGo(raw: unknown): OpenCodeGoConfig | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const o = raw as Record<string, unknown>;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new Error("opencode-go must be a mapping with a keys list");
+  }
+  if (!Array.isArray(o.keys))
+    throw new Error("opencode-go.keys must be a list");
+  const seen = new Set<string>();
+  const keys = o.keys.map((k, i) => {
+    if (typeof k !== "string" || k.trim().length < 20 || /\s/.test(k.trim())) {
+      throw new Error(
+        `opencode-go.keys[${i}] must be a key of at least 20 characters`,
+      );
+    }
+    const key = k.trim();
+    if (seen.has(key)) throw new Error(`opencode-go.keys[${i}] is a duplicate`);
+    seen.add(key);
+    return key;
+  });
+  const out: OpenCodeGoConfig = { keys };
+  if (o["base-url"] !== undefined) {
+    if (
+      typeof o["base-url"] !== "string" ||
+      !/^https?:\/\//.test(o["base-url"])
+    ) {
+      throw new Error("opencode-go.base-url must be an http(s) address");
+    }
+    out["base-url"] = o["base-url"].replace(/\/+$/, "");
+  }
+  return out;
 }
 
 export function validateCatalog(list: unknown): CatalogModel[] | undefined {
@@ -370,6 +418,7 @@ export function loadConfig(configPath?: string): Config {
   raw["api-keys"] = validateApiKeys(raw["api-keys"]);
   raw["dashboard-users"] = validateDashboardUsers(raw["dashboard-users"]);
   raw.models = validateCatalog(raw.models);
+  raw["opencode-go"] = validateOpenCodeGo(raw["opencode-go"]);
   if (
     !raw.stats.enabled &&
     raw["api-keys"].some((k) => k["daily-token-limit"] !== undefined)

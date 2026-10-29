@@ -1,4 +1,4 @@
-import { ProviderId } from "../auth/types";
+import { ProviderId, StatsProviderId } from "../auth/types";
 import { UsageData } from "../accounts/manager";
 import { StatsAppender, replayStatsEvents, statsFilePath } from "./storage";
 
@@ -16,7 +16,7 @@ export interface StatsEvent {
   ua: string;
   endpoint: string;
   model: string | null;
-  provider: ProviderId | null;
+  provider: StatsProviderId | null;
   accountEmail: string | null;
   status: "success" | "failure";
   failureKind: string | null;
@@ -46,14 +46,14 @@ export interface ClientBucket extends BaseBucket {
 }
 
 export interface AccountBucket extends BaseBucket {
-  provider: ProviderId;
+  provider: StatsProviderId;
   email: string;
 }
 
 export interface ApiBucket extends BaseBucket {
   endpoint: string;
   model: string;
-  provider: ProviderId | null;
+  provider: StatsProviderId | null;
 }
 
 export interface StatsSnapshot {

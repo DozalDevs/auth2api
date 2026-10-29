@@ -18,6 +18,9 @@ import { registerKeyRoutes, utcDay } from "./keys/routes";
 import { ApiKeyEntry, CatalogModel } from "./config";
 import { ModelCatalog } from "./models/catalog";
 import { resolveModel } from "./upstream/translator";
+import { GoKeyPool } from "./opencode-go/pool";
+import { createGoHandler, isGoModel } from "./opencode-go/proxy";
+import { registerGoAdminRoutes } from "./opencode-go/routes";
 import { DASHBOARD_CSP, DASHBOARD_HTML } from "./ui/dashboard";
 import { registerSetupRoutes } from "./setup/routes";
 import {
@@ -49,14 +52,20 @@ export function createServer(
   const app = express();
   const sessions = new SessionStore();
   const loginThrottle = new LoginThrottle();
+  const catalog = new ModelCatalog(config.models, {
+    persist: opts.persistCatalog,
+  });
   const keyStore = new KeyStore(config["api-keys"], {
     statsEnabled: !!statsRecorder,
     persist: opts.persistKeys,
     now: opts.now,
+    standardIds: () =>
+      catalog
+        .list()
+        .filter((m) => m.access === "standard")
+        .map((m) => m.id),
   });
-  const catalog = new ModelCatalog(config.models, {
-    persist: opts.persistCatalog,
-  });
+  const goPool = new GoKeyPool(config["opencode-go"]?.keys ?? []);
 
   app.use(express.json({ limit: config["body-limit"] }));
 
@@ -331,6 +340,7 @@ export function createServer(
   app.use("/admin", statsFinishMiddleware);
   app.use("/admin", requireAdmin);
   registerKeyRoutes(app, keyStore, statsRecorder, catalog);
+  registerGoAdminRoutes(app, config, goPool, catalog);
 
   // GET /admin/stats — three-axis aggregated call statistics.
   //   byClient — keyed by sha256(api-key); show short hex prefix to operator
@@ -463,6 +473,23 @@ export function createServer(
     }
     next();
   });
+  // OpenCode Go models (go/<id>) go straight to Go with a key from the pool.
+  // This sits after the per-key policy above, so the model allowlist, grants and
+  // daily token cap apply to them exactly as to every other model.
+  const goRoutes: Array<[string, "chat" | "responses" | "messages" | "count"]> =
+    [
+      ["/v1/chat/completions", "chat"],
+      ["/v1/responses", "responses"],
+      ["/v1/messages", "messages"],
+      ["/v1/messages/count_tokens", "count"],
+    ];
+  for (const [route, kind] of goRoutes) {
+    const handler = createGoHandler(config, goPool, kind);
+    app.post(route, (req, res, next) =>
+      isGoModel(req.body?.model) ? handler(req, res, next) : next(),
+    );
+  }
+
   app.get("/v1/models", async (_req, res) => {
     const entry = res.locals.keyEntry as ApiKeyEntry;
     const created = Math.floor(Date.now() / 1000);
