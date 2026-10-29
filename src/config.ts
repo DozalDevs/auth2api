@@ -81,6 +81,35 @@ export interface KeyGrant {
   note?: string;
 }
 
+/**
+ * Someone with a key asking for temporary access to models it does not have.
+ * An admin approves (which creates an ordinary grant) or rejects it.
+ */
+export type AccessRequestStatus =
+  | "pending"
+  | "approved"
+  | "rejected"
+  | "cancelled";
+
+export interface AccessRequest {
+  id: string;
+  /** Name of the key that asked. */
+  key: string;
+  models: string[];
+  /** Why they need it; required, shown to whoever decides. */
+  reason: string;
+  /** How long they asked for. The approver may change it. */
+  minutes: number;
+  status: AccessRequestStatus;
+  "requested-at": string;
+  "decided-at"?: string;
+  "decided-by"?: string;
+  /** Why it was rejected, or a remark when approved. */
+  "decision-note"?: string;
+  /** When the approved access ends. */
+  until?: string;
+}
+
 export type ModelAccess = "standard" | "on_request";
 
 /**
@@ -121,6 +150,7 @@ export interface Config {
   "dashboard-users"?: DashboardUser[];
   models?: CatalogModel[];
   "opencode-go"?: OpenCodeGoConfig;
+  "access-requests"?: AccessRequest[];
   "body-limit": string;
   cloaking: CloakingConfig;
   timeouts: TimeoutConfig;
@@ -224,6 +254,76 @@ export function validateGrants(list: unknown, where: string): KeyGrant[] {
     };
     if (typeof o.note === "string" && o.note.trim()) grant.note = o.note.trim();
     return grant;
+  });
+}
+
+const REQUEST_STATUSES: AccessRequestStatus[] = [
+  "pending",
+  "approved",
+  "rejected",
+  "cancelled",
+];
+
+export function validateAccessRequests(list: unknown): AccessRequest[] {
+  if (list === undefined || list === null) return [];
+  if (!Array.isArray(list)) throw new Error("access-requests must be a list");
+  return list.map((r, i) => {
+    const w = `access-requests[${i}]`;
+    const o = (r ?? {}) as Record<string, unknown>;
+    if (typeof o.id !== "string" || !GRANT_ID_RE.test(o.id)) {
+      throw new Error(`${w}: id must be 8 hex characters`);
+    }
+    if (typeof o.key !== "string" || !KEY_NAME_RE.test(o.key)) {
+      throw new Error(`${w}: key must be a key name`);
+    }
+    if (
+      !Array.isArray(o.models) ||
+      o.models.length === 0 ||
+      !o.models.every(isValidModelId)
+    ) {
+      throw new Error(`${w}: models must be a non-empty list of model names`);
+    }
+    if (typeof o.reason !== "string" || !o.reason.trim()) {
+      throw new Error(`${w}: reason is required`);
+    }
+    if (typeof o.minutes !== "number" || !Number.isInteger(o.minutes)) {
+      throw new Error(`${w}: minutes must be a whole number`);
+    }
+    if (!REQUEST_STATUSES.includes(o.status as AccessRequestStatus)) {
+      throw new Error(
+        `${w}: status must be one of ${REQUEST_STATUSES.join(", ")}`,
+      );
+    }
+    for (const field of ["requested-at", "decided-at", "until"]) {
+      const v = o[field];
+      if (
+        v !== undefined &&
+        (typeof v !== "string" || Number.isNaN(Date.parse(v)))
+      ) {
+        throw new Error(`${w}: ${field} must be a timestamp`);
+      }
+    }
+    if (o["requested-at"] === undefined) {
+      throw new Error(`${w}: requested-at is required`);
+    }
+    const out: AccessRequest = {
+      id: o.id,
+      key: o.key,
+      models: o.models as string[],
+      reason: o.reason,
+      minutes: o.minutes,
+      status: o.status as AccessRequestStatus,
+      "requested-at": o["requested-at"] as string,
+    };
+    for (const field of [
+      "decided-at",
+      "decided-by",
+      "decision-note",
+      "until",
+    ] as const) {
+      if (typeof o[field] === "string") out[field] = o[field] as string;
+    }
+    return out;
   });
 }
 
@@ -419,6 +519,7 @@ export function loadConfig(configPath?: string): Config {
   raw["dashboard-users"] = validateDashboardUsers(raw["dashboard-users"]);
   raw.models = validateCatalog(raw.models);
   raw["opencode-go"] = validateOpenCodeGo(raw["opencode-go"]);
+  raw["access-requests"] = validateAccessRequests(raw["access-requests"]);
   if (
     !raw.stats.enabled &&
     raw["api-keys"].some((k) => k["daily-token-limit"] !== undefined)
@@ -454,6 +555,12 @@ export function persistApiKeys(
   filePath: string,
 ): (entries: ApiKeyEntry[]) => void {
   return persistSection(filePath, "api-keys");
+}
+
+export function persistAccessRequests(
+  filePath: string,
+): (requests: AccessRequest[]) => void {
+  return persistSection(filePath, "access-requests");
 }
 
 export function persistCatalog(

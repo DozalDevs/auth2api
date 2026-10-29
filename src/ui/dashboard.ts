@@ -121,6 +121,13 @@ h3 { font-size: 14px; margin: 16px 0 4px; color: var(--muted); }
 .madd button { white-space: nowrap; }
 .madd select { min-height: 40px; width: 100%; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 0 8px; font: inherit; color: inherit; }
 .krow-grid-extra { grid-column: 1 / -1; }
+.req { border-top: 1px solid var(--line); padding: 12px 0; display: grid; gap: 8px; }
+.req .who { font-weight: 600; overflow-wrap: anywhere; }
+.req .why { background: var(--chip); border-radius: 8px; padding: 8px 10px; overflow-wrap: anywhere; white-space: pre-wrap; }
+.req .acts { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.req .acts select, .req .acts input { min-height: 40px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); padding: 0 8px; font: inherit; color: inherit; }
+.req .acts input { flex: 1; min-width: 180px; }
+.req.done { color: var(--muted); font-size: 13px; padding: 8px 0; gap: 2px; }
 @media (max-width: 760px) {
   main { padding: 12px; }
   .krow.head { display: none; }
@@ -404,7 +411,7 @@ const JS = String.raw`
     $('f-name').disabled = !!key;
     $('f-cap').value = key && key.daily_token_limit ? key.daily_token_limit : '';
     keyModels.setOptions(catalogOptions());
-    keyModels.set(key ? key.models : []);
+    keyModels.set(key ? key.models : ['@standard']);
     $('f-save').textContent = key ? 'Save changes' : 'Create key';
     $('secret-panel').hidden = true;
     form.hidden = false;
@@ -538,6 +545,59 @@ const JS = String.raw`
       .then(function () { say('Ended ' + k.name + "'s access to " + namesOf(g.models) + '.', 'ok'); return refresh(); }).catch(fail);
   }
 
+  // ---- Access requests ----
+  function requestMinutesOptions(asked) {
+    var opts = [60, 120, 240, 480, 1440];
+    if (opts.indexOf(asked) === -1) opts.push(asked);
+    return opts.sort(function (a, b) { return a - b; });
+  }
+  function minutesText(m) {
+    if (m % 1440 === 0) return (m / 1440) + (m === 1440 ? ' day' : ' days');
+    if (m % 60 === 0) return (m / 60) + (m === 60 ? ' hour' : ' hours');
+    return m + ' min';
+  }
+  function decideRequest(r, action, minutes, note, btns) {
+    btns.forEach(function (b) { b.disabled = true; });
+    var body = { note: note || undefined };
+    if (action === 'approve') body.minutes = minutes;
+    api('POST', '/admin/access-requests/' + encodeURIComponent(r.id) + '/' + action, body)
+      .then(function () {
+        say(action === 'approve' ? r.key + ' can use ' + namesOf(r.models) + ' for ' + minutesText(minutes) + '.' : 'Rejected ' + r.key + "'s request.", 'ok');
+        return refresh();
+      }).catch(function (err) { fail(err); refresh(); }).then(function () { btns.forEach(function (b) { b.disabled = false; }); });
+  }
+  function renderRequests() {
+    var box = $('requests');
+    clear(box);
+    var all = state.requests || [];
+    var pending = all.filter(function (r) { return r.status === 'pending'; }).reverse();
+    var decided = all.filter(function (r) { return r.status === 'approved' || r.status === 'rejected'; }).slice(0, 5);
+    $('req-count').textContent = pending.length ? '(' + pending.length + ' waiting)' : '';
+    if (!pending.length) box.appendChild(h('p', { class: 'empty', text: 'No requests waiting.' }));
+    pending.forEach(function (r) {
+      var sel = h('select', { 'aria-label': 'How long to lend it to ' + r.key });
+      requestMinutesOptions(r.requested_minutes).forEach(function (m) { sel.appendChild(h('option', { value: String(m), text: minutesText(m) + (m === r.requested_minutes ? ' (asked for)' : '') })); });
+      sel.value = String(r.requested_minutes);
+      var note = h('input', { type: 'text', maxlength: '200', placeholder: 'Note to them (optional)', 'aria-label': 'Note to ' + r.key });
+      var ok = h('button', { type: 'button', class: 'primary', text: 'Approve' });
+      var no = h('button', { type: 'button', text: 'Reject' });
+      ok.addEventListener('click', function () { decideRequest(r, 'approve', Number(sel.value), note.value.trim(), [ok, no]); });
+      no.addEventListener('click', function () { decideRequest(r, 'reject', 0, note.value.trim(), [ok, no]); });
+      box.appendChild(h('div', { class: 'req' }, [
+        h('div', { class: 'who', text: r.key + ' asks for ' + namesOf(r.models) + ' for ' + minutesText(r.requested_minutes) }),
+        h('div', { class: 'why', text: r.reason }),
+        h('div', { class: 'muted', text: 'Asked ' + agoShort(Math.max(0, Math.round((Date.now() - Date.parse(r.requested_at)) / 1000))) }),
+        h('div', { class: 'acts' }, [h('label', { class: 'muted', text: 'Lend for' }), sel, note, ok, no])
+      ]));
+    });
+    decided.forEach(function (r) {
+      var line = r.status === 'approved'
+        ? 'Approved by ' + r.decided_by + ': ' + r.key + ' got ' + namesOf(r.models) + (r.seconds_left > 0 ? ' (' + left(r.seconds_left) + ')' : ' (ended)')
+        : 'Rejected by ' + r.decided_by + ': ' + r.key + ' asked for ' + namesOf(r.models) + (r.decision_note ? ' \u00b7 ' + r.decision_note : '');
+      box.appendChild(h('div', { class: 'req done' }, [h('div', { text: line }), h('div', { text: 'Reason given: ' + r.reason })]));
+    });
+  }
+
   // ---- Models ----
   function accessSelect(current, onChange) {
     var sel = h('select', { 'aria-label': 'Who is it listed for' }, [
@@ -630,12 +690,15 @@ const JS = String.raw`
     // Usage is optional: a relay with stats turned off answers 409 there, and that must not stop the keys from loading.
     var usageReq = api('GET', '/admin/usage?days=' + state.days).catch(function (err) { if (err.status === 409) return null; throw err; });
     var goReq = api('GET', '/admin/go').catch(function (err) { if (err.status === 401) throw err; return null; });
-    return Promise.all([api('GET', '/admin/keys'), usageReq, api('GET', '/admin/models'), goReq]).then(function (res) {
+    var reqReq = api('GET', '/admin/access-requests?status=all').catch(function (err) { if (err.status === 401) throw err; return null; });
+    return Promise.all([api('GET', '/admin/keys'), usageReq, api('GET', '/admin/models'), goReq, reqReq]).then(function (res) {
       state.keys = res[0].keys;
       state.usage = res[1];
       state.models = res[2].models;
       state.modelSource = res[2].source;
       state.go = res[3];
+      state.requests = res[4] ? res[4].requests : [];
+      renderRequests();
       renderKeys();
       renderModels();
       renderUsage();
@@ -740,6 +803,14 @@ const BODY = String.raw`
         <button id="copy-btn" class="primary" type="button">Copy key</button>
         <button id="secret-done" type="button">Done</button>
       </div>
+    </section>
+
+    <section class="panel" id="req-panel">
+      <div class="panel-head">
+        <h2>Access requests <span id="req-count" class="muted"></span></h2>
+      </div>
+      <p class="hint">People ask for a model from their own key and say why. Approve to lend it for the time you choose, or reject. An approved request works straight away.</p>
+      <div id="requests"></div>
     </section>
 
     <section class="panel">

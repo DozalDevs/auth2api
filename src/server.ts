@@ -15,7 +15,12 @@ import { StatsRecorder } from "./stats/recorder";
 import { RateLimiter, clientIp } from "./utils/rate-limit";
 import { KeyStore } from "./keys/store";
 import { registerKeyRoutes, utcDay } from "./keys/routes";
-import { ApiKeyEntry, CatalogModel } from "./config";
+import {
+  AccessRequestStore,
+  registerRequestAdminRoutes,
+  registerRequestRoutes,
+} from "./keys/requests";
+import { AccessRequest, ApiKeyEntry, CatalogModel } from "./config";
 import { ModelCatalog } from "./models/catalog";
 import { resolveModel } from "./upstream/translator";
 import { GoKeyPool } from "./opencode-go/pool";
@@ -46,6 +51,7 @@ export function createServer(
   opts: {
     persistKeys?: (entries: ApiKeyEntry[]) => void;
     persistCatalog?: (models: CatalogModel[]) => void;
+    persistRequests?: (requests: AccessRequest[]) => void;
     now?: () => number;
   } = {},
 ): express.Application {
@@ -65,6 +71,12 @@ export function createServer(
         .filter((m) => m.access === "standard")
         .map((m) => m.id),
   });
+  const accessRequests = new AccessRequestStore(
+    config["access-requests"] ?? [],
+    keyStore,
+    catalog,
+    { persist: opts.persistRequests },
+  );
   const goPool = new GoKeyPool(config["opencode-go"]?.keys ?? []);
 
   app.use(express.json({ limit: config["body-limit"] }));
@@ -341,6 +353,7 @@ export function createServer(
   app.use("/admin", requireAdmin);
   registerKeyRoutes(app, keyStore, statsRecorder, catalog);
   registerGoAdminRoutes(app, config, goPool, catalog);
+  registerRequestAdminRoutes(app, accessRequests, keyStore);
 
   // GET /admin/stats — three-axis aggregated call statistics.
   //   byClient — keyed by sha256(api-key); show short hex prefix to operator
@@ -423,6 +436,11 @@ export function createServer(
       .send(lines.length ? `${lines.join("\n")}\n` : "");
   });
 
+  registerRequestRoutes(app, accessRequests, keyStore, [
+    requireApiKey,
+    rateLimit,
+  ]);
+
   app.use(["/v1", "/codex", "/backend-api/codex"], requireApiKey);
   app.use(["/v1", "/codex", "/backend-api/codex"], statsFinishMiddleware);
 
@@ -449,7 +467,7 @@ export function createServer(
           error: {
             message: ended
               ? `Your temporary access to "${model}" ended ${agoText(keyStore.now() - Date.parse(ended.until))}. Ask the engineering team for more time.`
-              : `"${model}" is not enabled for this key. Ask the engineering team for access.`,
+              : `"${model}" is not enabled for this key. Ask the engineering team for access, or request temporary access with POST /access-requests {"model":"${model}","reason":"why you need it"}.`,
             type: "model_not_allowed",
             ...(ended && { code: "grant_expired" }),
           },

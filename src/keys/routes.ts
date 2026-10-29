@@ -1,5 +1,5 @@
 import express from "express";
-import { ApiKeyEntry, KeyGrant } from "../config";
+import { ApiKeyEntry, KeyGrant, STANDARD_GROUP } from "../config";
 import { ModelCatalog } from "../models/catalog";
 import { StatsRecorder } from "../stats/recorder";
 import { hashApiKey } from "../utils/common";
@@ -100,7 +100,7 @@ export function registerKeyRoutes(
       const b = req.body ?? {};
       const entry = store.create({
         name: b.name,
-        models: b.models,
+        models: b.models === undefined ? [STANDARD_GROUP] : b.models,
         ...(b.daily_token_limit !== undefined && {
           "daily-token-limit": b.daily_token_limit,
         }),
