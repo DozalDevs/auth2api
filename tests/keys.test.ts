@@ -317,8 +317,10 @@ test("admin key management rejects bad input and refuses to lock the relay out",
     400,
   );
   assert.equal(
-    (await call("POST", "/admin/keys", ADMIN, { name: "nomodels" })).status,
+    (await call("POST", "/admin/keys", ADMIN, { name: "nomodels", models: [] }))
+      .status,
     400,
+    "an explicitly empty list is still refused; leaving models out means standard",
   );
   assert.equal(
     (await call("PATCH", "/admin/keys/ghost", ADMIN, {})).status,

@@ -4,6 +4,7 @@ import { hashPassword } from "./auth/password";
 import {
   Config,
   loadConfig,
+  persistAccessRequests,
   persistApiKeys,
   persistCatalog,
   resolveAuthDir,
@@ -185,6 +186,7 @@ async function startServer(): Promise<void> {
   const app = createServer(config, registry, statsRecorder, {
     persistKeys: persistApiKeys(configPath || "config.yaml"),
     persistCatalog: persistCatalog(configPath || "config.yaml"),
+    persistRequests: persistAccessRequests(configPath || "config.yaml"),
   });
   const host = config.host || "127.0.0.1";
   const port = config.port;
