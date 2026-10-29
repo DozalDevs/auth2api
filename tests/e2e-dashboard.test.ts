@@ -82,15 +82,20 @@ test(
     ).newPage();
     const problems: string[] = [];
     page.on("pageerror", (e: Error) => problems.push(e.message));
-    await page.goto(`${base}/admin/ui`);
+    await page.goto(`${base}/admin/ui?tab=keys`);
     await page.fill("#username", "admin@example.com");
     await page.fill("#password", "correct horse battery");
     await page.click("#connect");
-    await page.waitForSelector(".krow:not(.head)");
-    const row = (name: string) =>
-      page.locator(".krow:not(.head)", {
-        has: page.locator(".name", { hasText: new RegExp(`^${name}`) }),
-      });
+    await page.waitForSelector(".krow[data-key]");
+    const row = (name: string) => page.locator(`.krow[data-key="${name}"]`);
+    const toast = (re: RegExp) =>
+      page.waitForFunction(
+        (src: string) =>
+          new RegExp(src).test(
+            document.getElementById("toast")!.textContent || "",
+          ),
+        re.source,
+      );
     const ask = (key: string, model: string) =>
       fetch(`${base}/v1/chat/completions`, {
         method: "POST",
@@ -103,9 +108,15 @@ test(
         status: r.status,
         body: await r.json().catch(() => null),
       }));
+    const menuItem = async (name: string, item: string) => {
+      await row(name)
+        .getByRole("button", { name: /More actions/ })
+        .click();
+      await page.getByRole("menuitem", { name: item }).click();
+    };
 
     // 1. The model picker is a multi-select dropdown fed by the model list, with search, and shows friendly names.
-    await row("carol").getByRole("button", { name: "Edit" }).click();
+    await menuItem("carol", "Edit access and limit");
     await page.click("#f-models-btn");
     assert.equal(
       await page.locator("#f-models-slot .ms-row").count(),
@@ -125,9 +136,7 @@ test(
     await page.click("#f-models-slot .ms-foot .primary");
     assert.match(await page.textContent("#f-models-btn"), /2 models selected/);
     await page.click("#f-save");
-    await page.waitForFunction(() =>
-      /Saved/.test(document.getElementById("status")!.textContent || ""),
-    );
+    await toast(/Saved carol/);
     assert.equal(
       (await ask("sk-carol-0123456789abcdef", "gpt-6-sol")).body?.error
         ?.type === "model_not_allowed",
@@ -135,13 +144,20 @@ test(
       "Sol now allowed by the edit",
     );
 
-    // 2. Give temporary access to a model she does not have.
+    // 2. Give temporary access to a model she does not have, from a form that opens right under her row.
     assert.equal(
       (await ask("sk-carol-0123456789abcdef", "claude-opus-5-5")).body.error
         .type,
       "model_not_allowed",
     );
-    await row("carol").getByRole("button", { name: "Give access" }).click();
+    await row("carol")
+      .getByRole("button", { name: /Give carol temporary access/ })
+      .click();
+    assert.equal(
+      await page.locator(".krow[data-key=carol] + #grant-form").count(),
+      1,
+      "the form sits directly under her row",
+    );
     await page.click("#g-models-btn");
     const options = await page
       .locator("#g-models-slot .ms-list .ms-row .ms-name")
@@ -157,20 +173,13 @@ test(
       .check();
     await page.click("#g-models-slot .ms-foot .primary");
     await page.getByRole("button", { name: "4 hours", exact: true }).click();
-    assert.match(
-      await page.textContent("#g-preview"),
-      /Access ends .* \(4h from now\)/,
-    );
+    assert.match(await page.textContent("#g-preview"), /Ends .* \(in 4h\)/);
     await page.fill("#g-note", "complex UI task");
     await page.click("#g-save");
-    await page.waitForFunction(() =>
-      /can use Claude Opus 5.5 for 4h/.test(
-        document.getElementById("status")!.textContent || "",
-      ),
-    );
-    await page.waitForSelector(".pill .left");
+    await toast(/can use Claude Opus 5.5 for 4h/);
+    await page.waitForSelector(".loan .left");
     assert.match(
-      await row("carol").locator(".pill .left").first().textContent(),
+      await row("carol").locator(".loan .left").first().textContent(),
       /3h 5\d.m left|4h left/,
     );
 
@@ -205,15 +214,18 @@ test(
       relisted,
       /claude-opus-5-5\ton_request\tClaude Opus 5\.5 \(on request\)/,
     );
-    await page.click("#refresh");
-    await page.waitForSelector(".pill.ended");
-    assert.match(
-      await row("carol").locator(".pill.ended").textContent(),
-      /Claude Opus 5\.5.*ended/,
+    await page.goto(`${base}/admin/ui?tab=keys`);
+    await page.waitForSelector(".krow[data-key=carol]");
+    assert.equal(
+      await row("carol").locator(".loan").count(),
+      0,
+      "the ended loan is gone from her row",
     );
 
-    // 5. End one early from the page.
-    await row("carol").getByRole("button", { name: "Give access" }).click();
+    // 5. End one early from the page; the confirm says what happens and the button names the verb.
+    await row("carol")
+      .getByRole("button", { name: /Give carol temporary access/ })
+      .click();
     await page.click("#g-models-btn");
     await page
       .locator("#g-models-slot .ms-row", { hasText: "Claude Opus 5.5" })
@@ -222,18 +234,31 @@ test(
     await page.click("#g-models-slot .ms-foot .primary");
     await page.getByRole("button", { name: "2 hours", exact: true }).click();
     await page.click("#g-save");
-    await page.waitForSelector(".pill .left");
+    await page.waitForSelector(".loan .left");
     assert.notEqual(
       (await ask("sk-carol-0123456789abcdef", "claude-opus-5-5")).body?.error
         ?.type,
       "model_not_allowed",
     );
-    page.once("dialog", (d: any) => d.accept());
     await row("carol")
-      .getByRole("button", { name: "End access to Claude Opus 5.5 for carol" })
+      .getByRole("button", { name: "End carol's access to Claude Opus 5.5" })
       .click();
+    assert.match(
+      await page.textContent("#confirm-body"),
+      /loses it right away/,
+    );
+    await page.click("#confirm-no");
+    assert.equal(
+      await row("carol").locator(".loan").count(),
+      1,
+      "Keep it leaves the loan alone",
+    );
+    await row("carol")
+      .getByRole("button", { name: "End carol's access to Claude Opus 5.5" })
+      .click();
+    await page.click("#confirm-yes");
     await page.waitForFunction(
-      () => document.querySelectorAll(".pill .left").length === 0,
+      () => document.querySelectorAll(".loan .left").length === 0,
     );
     assert.equal(
       (await ask("sk-carol-0123456789abcdef", "claude-opus-5-5")).body.error
@@ -241,24 +266,21 @@ test(
       "model_not_allowed",
     );
 
-    // 5b. A key that already has every model shows a greyed-out Give access and says why, instead of hiding it.
-    const bossGive = row("boss").getByRole("button", { name: "Give access" });
+    // 5b. A key that already has every model has nothing to lend, so it offers Edit instead of a dead Give access.
     assert.equal(
-      await bossGive.count(),
+      await row("boss")
+        .getByRole("button", { name: /Give boss temporary access/ })
+        .count(),
+      0,
+    );
+    assert.equal(
+      await row("boss").getByRole("button", { name: "Edit boss" }).count(),
       1,
-      "the button is visible on a key with every model",
     );
-    assert.equal(await bossGive.isDisabled(), true);
-    assert.match(await row("boss").textContent(), /Already has every model/);
-    assert.equal(
-      await row("carol")
-        .getByRole("button", { name: "Give access" })
-        .isDisabled(),
-      false,
-    );
+    assert.match(await row("boss").textContent(), /Every model/);
 
     // 5c. "All standard models" is one tick in the dropdown, and it follows the model list.
-    await row("carol").getByRole("button", { name: "Edit" }).click();
+    await menuItem("carol", "Edit access and limit");
     await page.click("#f-models-btn");
     await page
       .locator("#f-models-slot .ms-any", { hasText: "All standard models" })
@@ -270,11 +292,9 @@ test(
       /Standard \+ \d+ more|All standard models/,
     );
     await page.click("#f-save");
-    await page.waitForFunction(() =>
-      /Saved/.test(document.getElementById("status")!.textContent || ""),
-    );
+    await toast(/Saved carol/);
     assert.match(
-      await row("carol").locator(".chips").textContent(),
+      await row("carol").locator(".k-access").textContent(),
       /All standard models/,
     );
     assert.equal(
@@ -291,19 +311,17 @@ test(
     );
 
     // 5d. With no OpenCode Go keys on the relay the sync button is not offered at all.
-    assert.equal(await page.locator("#go-sync").count(), 0);
+    await page.click("#tab-models");
+    assert.equal(await page.locator("#go-sync").isVisible(), false);
 
     // 6. Add a model to the list from the page.
+    await page.click("#add-model");
     await page.fill("#m-id", "claude-sonnet-5-5");
     await page.fill("#m-name", "Claude Sonnet 5.5");
     await page.click("#m-add");
-    await page.waitForFunction(() =>
-      /Added Claude Sonnet 5.5/.test(
-        document.getElementById("status")!.textContent || "",
-      ),
-    );
+    await toast(/Added Claude Sonnet 5.5/);
     const modelRows = await page
-      .locator("#models .mrow:not(.head) .name")
+      .locator("#models .mrow .m-name")
       .allTextContents();
     assert.equal(
       modelRows.length,
@@ -385,15 +403,11 @@ test(
     const page = await (
       await browser.newContext({ viewport: { width: 1280, height: 900 } })
     ).newPage();
-    await page.goto(`${base}/admin/ui`);
+    await page.goto(`${base}/admin/ui?tab=models`);
     await page.fill("#username", "admin@example.com");
     await page.fill("#password", "correct horse battery");
     await page.click("#connect");
-    await page.waitForSelector("#go-sync");
-    assert.match(
-      await page.textContent("#go-sync-box"),
-      /connected with 2 keys/,
-    );
+    await page.waitForSelector("#go-sync:visible");
     assert.equal(
       await page
         .textContent("body")
@@ -405,17 +419,26 @@ test(
     await page.click("#go-sync");
     await page.waitForFunction(() =>
       /Added 2 OpenCode Go models/.test(
-        document.getElementById("status")!.textContent || "",
+        document.getElementById("toast")!.textContent || "",
       ),
     );
-    const cheap = page
-      .locator("#models .mrow", { hasText: "GLM-5.3 Flash (OpenCode Go)" })
-      .locator("select");
-    const dear = page
-      .locator("#models .mrow", { hasText: "Kimi K3 (OpenCode Go)" })
-      .locator("select");
-    assert.equal(await cheap.inputValue(), "standard");
-    assert.equal(await dear.inputValue(), "on_request");
+    const firstMenuItem = async (name: string) => {
+      const row = page.locator("#models .mrow", { hasText: name });
+      await row.getByRole("button", { name: /Actions for/ }).click();
+      const text = await row.getByRole("menuitem").first().textContent();
+      await page.keyboard.press("Escape");
+      return text;
+    };
+    assert.equal(
+      await firstMenuItem("GLM-5.3 Flash"),
+      "Make on request",
+      "the cheap model is standard",
+    );
+    assert.equal(
+      await firstMenuItem("Kimi K3"),
+      "Make standard",
+      "the dear model is on request",
+    );
     assert.equal(
       await page.locator("#models .mrow", { hasText: "muse-spark" }).count(),
       0,
@@ -424,8 +447,8 @@ test(
 
     await page.click("#go-sync");
     await page.waitForFunction(() =>
-      /already has every OpenCode Go model/.test(
-        document.getElementById("status")!.textContent || "",
+      /already have every OpenCode Go model/.test(
+        document.getElementById("toast")!.textContent || "",
       ),
     );
   },

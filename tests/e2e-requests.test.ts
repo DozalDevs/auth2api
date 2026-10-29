@@ -112,36 +112,47 @@ test(
     ).newPage();
     const problems: string[] = [];
     page.on("pageerror", (e: Error) => problems.push(e.message));
+    const toast = (re: RegExp) =>
+      page.waitForFunction(
+        (src: string) =>
+          new RegExp(src).test(
+            document.getElementById("toast")!.textContent || "",
+          ),
+        re.source,
+      );
     await page.goto(`${base}/admin/ui`);
     await page.fill("#username", "leo@example.com");
     await page.fill("#password", "correct horse battery");
     await page.click("#connect");
-    await page.waitForSelector(".req");
+    await page.waitForSelector(".rq");
 
-    assert.match(await page.textContent("#req-count"), /2 waiting/);
-    const cards = page.locator("#requests .req:not(.done)");
+    assert.equal(
+      await page.getAttribute("#tab-requests", "aria-selected"),
+      "true",
+      "with requests waiting, the first thing you see is the requests",
+    );
+    assert.equal((await page.textContent("#req-count")).trim(), "2");
+    const cards = page.locator("#requests .rq");
     assert.equal(await cards.count(), 2);
     const opusCard = cards.filter({ hasText: "Claude Opus 5.5" });
     assert.match(
       await opusCard.textContent(),
-      /carol asks for Claude Opus 5.5 for 8 hours/,
+      /carol[\s\S]*wants Claude Opus 5\.5 for 8 hours/,
     );
     assert.match(
-      await opusCard.locator(".why").textContent(),
+      await opusCard.locator(".rq-why").textContent(),
       /Reviewing the dashboard redesign/,
       "the reason is on the card",
     );
     assert.equal(
-      await opusCard.locator("select").inputValue(),
-      "480",
-      "the time they asked for is preselected",
+      await opusCard.getByRole("button", { name: /^Approve/ }).textContent(),
+      "Approve for 8 hours",
+      "the button says what approving does",
     );
     if (SHOTS) {
       await page.screenshot({ path: `${SHOTS}/requests-1440.png` });
       await page.setViewportSize({ width: 375, height: 800 });
-      await page
-        .locator("#req-panel")
-        .screenshot({ path: `${SHOTS}/requests-375.png` });
+      await page.screenshot({ path: `${SHOTS}/requests-375.png` });
       await page.setViewportSize({ width: 1280, height: 900 });
     }
 
@@ -149,47 +160,47 @@ test(
       (await ask("claude-opus-5-5")).body.error.type,
       "model_not_allowed",
     );
-    await opusCard.locator("select").selectOption("120");
-    await opusCard.getByPlaceholder("Note to them").fill("fine, two hours");
-    await opusCard.getByRole("button", { name: "Approve" }).click();
-    await page.waitForFunction(() =>
-      /carol can use Claude Opus 5.5 for 2 hours/.test(
-        document.getElementById("status")!.textContent || "",
-      ),
+    await opusCard
+      .getByRole("button", { name: "Change time or add a note" })
+      .click();
+    await opusCard
+      .getByLabel("How long to lend it to carol")
+      .selectOption("120");
+    assert.equal(
+      await opusCard.getByRole("button", { name: /^Approve/ }).textContent(),
+      "Approve for 2 hours",
+      "the button follows the chosen length",
     );
+    await opusCard.getByPlaceholder("Note for carol").fill("fine, two hours");
+    await opusCard.getByRole("button", { name: /^Approve/ }).click();
+    await toast(/carol can use Claude Opus 5.5 for 2 hours/);
     assert.notEqual(
       (await ask("claude-opus-5-5")).body?.error?.type,
       "model_not_allowed",
       "approving in the dashboard opens it at once",
     );
-    assert.match(await page.textContent("#req-count"), /1 waiting/);
+    assert.equal((await page.textContent("#req-count")).trim(), "1");
+
+    await page.getByText("Recent decisions").click();
     assert.match(
       await page.textContent("#requests"),
-      /Approved by leo@example\.com: carol got Claude Opus 5\.5/,
-    );
-    assert.match(
-      await page
-        .locator(".krow:not(.head)", { hasText: "carol" })
-        .textContent(),
-      /Claude Opus 5\.5/,
-      "the loan shows on carol's key row",
+      /Approved · carol · Claude Opus 5\.5 · 1h 59m left|Approved · carol · Claude Opus 5\.5 · 2h left/,
     );
 
     const kimiCard = page
-      .locator("#requests .req:not(.done)")
+      .locator("#requests .rq")
       .filter({ hasText: "Kimi K3" });
-    await kimiCard.getByPlaceholder("Note to them").fill("use luna");
+    await kimiCard
+      .getByRole("button", { name: "Change time or add a note" })
+      .click();
+    await kimiCard.getByPlaceholder("Note for carol").fill("use luna");
     await kimiCard.getByRole("button", { name: "Reject" }).click();
-    await page.waitForFunction(() =>
-      /Rejected carol's request/.test(
-        document.getElementById("status")!.textContent || "",
-      ),
-    );
-    assert.match(await page.textContent("#req-count"), /^\s*$/);
+    await toast(/Rejected carol's request/);
+    assert.equal(await page.locator("#req-count").isVisible(), false);
     assert.match(await page.textContent("#requests"), /No requests waiting/);
     assert.match(
       await page.textContent("#requests"),
-      /Rejected by leo@example\.com: carol asked for Kimi K3 · use luna/,
+      /Rejected · carol · Kimi K3 · use luna/,
     );
     assert.equal((await ask("kimi-k3")).body.error.type, "model_not_allowed");
     const mine = await carol("/access-requests");
@@ -201,6 +212,12 @@ test(
       ],
     );
 
+    await page.click("#tab-keys");
+    assert.match(
+      await page.locator(".krow[data-key=carol] .loan").textContent(),
+      /Claude Opus 5\.5/,
+      "the loan shows on carol's row",
+    );
     await page.click("#add-key");
     assert.match(
       await page.textContent("#f-models-btn"),
@@ -210,8 +227,45 @@ test(
     await page.fill("#f-name", "newbie");
     await page.click("#f-save");
     await page.waitForSelector("#secret-panel:not([hidden])");
-    const row = page.locator(".krow:not(.head)", { hasText: "newbie" });
-    assert.match(await row.textContent(), /All standard models/);
+    assert.match(
+      await page.locator(".krow[data-key=newbie] .k-access").textContent(),
+      /All standard models/,
+    );
+
+    // The tab and the period live in the address bar, so a link or a refresh lands on the same screen and Back works.
+    await page.click("#tab-usage");
+    await page.getByRole("button", { name: "7 days" }).click();
+    assert.match(page.url(), /tab=usage/);
+    assert.match(page.url(), /days=7/);
+    await page.reload();
+    await page.waitForSelector("#panel-usage:not([hidden])");
+    assert.equal(
+      await page.getAttribute(
+        '.seg[aria-label=Period] [data-days="7"]',
+        "aria-pressed",
+      ),
+      "true",
+    );
+    await page.goBack();
+    assert.doesNotMatch(
+      page.url(),
+      /days=7/,
+      "the period change replaced itself, it did not stack",
+    );
+    await page.waitForSelector("#panel-keys:not([hidden])");
+
+    // Tabs work from the keyboard.
+    await page.focus("#tab-keys");
+    await page.keyboard.press("ArrowRight");
+    assert.equal(
+      await page.getAttribute("#tab-models", "aria-selected"),
+      "true",
+    );
+    await page.keyboard.press("Home");
+    assert.equal(
+      await page.getAttribute("#tab-requests", "aria-selected"),
+      "true",
+    );
 
     assert.deepEqual(problems, [], "no script errors on the page");
   },
