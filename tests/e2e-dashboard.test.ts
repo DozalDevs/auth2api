@@ -109,8 +109,8 @@ test(
     await page.click("#f-models-btn");
     assert.equal(
       await page.locator("#f-models-slot .ms-row").count(),
-      3 + 1,
-      "three models plus the Any model row",
+      3 + 2,
+      "three models plus the Any model and All standard models rows",
     );
     await page.fill("#f-models-slot .ms-search", "opus");
     assert.equal(
@@ -241,6 +241,58 @@ test(
       "model_not_allowed",
     );
 
+    // 5b. A key that already has every model shows a greyed-out Give access and says why, instead of hiding it.
+    const bossGive = row("boss").getByRole("button", { name: "Give access" });
+    assert.equal(
+      await bossGive.count(),
+      1,
+      "the button is visible on a key with every model",
+    );
+    assert.equal(await bossGive.isDisabled(), true);
+    assert.match(await row("boss").textContent(), /Already has every model/);
+    assert.equal(
+      await row("carol")
+        .getByRole("button", { name: "Give access" })
+        .isDisabled(),
+      false,
+    );
+
+    // 5c. "All standard models" is one tick in the dropdown, and it follows the model list.
+    await row("carol").getByRole("button", { name: "Edit" }).click();
+    await page.click("#f-models-btn");
+    await page
+      .locator("#f-models-slot .ms-any", { hasText: "All standard models" })
+      .locator("input")
+      .check();
+    await page.click("#f-models-slot .ms-foot .primary");
+    assert.match(
+      await page.textContent("#f-models-btn"),
+      /Standard \+ \d+ more|All standard models/,
+    );
+    await page.click("#f-save");
+    await page.waitForFunction(() =>
+      /Saved/.test(document.getElementById("status")!.textContent || ""),
+    );
+    assert.match(
+      await row("carol").locator(".chips").textContent(),
+      /All standard models/,
+    );
+    assert.equal(
+      (await ask("sk-carol-0123456789abcdef", "gpt-6-sol")).body?.error
+        ?.type === "model_not_allowed",
+      false,
+      "a standard model is open through the group",
+    );
+    assert.equal(
+      (await ask("sk-carol-0123456789abcdef", "claude-opus-5-5")).body.error
+        .type,
+      "model_not_allowed",
+      "an on-request model is not",
+    );
+
+    // 5d. With no OpenCode Go keys on the relay the sync button is not offered at all.
+    assert.equal(await page.locator("#go-sync").count(), 0);
+
     // 6. Add a model to the list from the page.
     await page.fill("#m-id", "claude-sonnet-5-5");
     await page.fill("#m-name", "Claude Sonnet 5.5");
@@ -250,7 +302,131 @@ test(
         document.getElementById("status")!.textContent || "",
       ),
     );
-    assert.equal(await page.locator("#models .mrow:not(.head)").count(), 4);
+    const modelRows = await page
+      .locator("#models .mrow:not(.head) .name")
+      .allTextContents();
+    assert.equal(
+      modelRows.length,
+      4,
+      `model rows: ${JSON.stringify(modelRows)}`,
+    );
     assert.deepEqual(problems, [], "no script errors in the page");
+  },
+);
+
+test(
+  "with OpenCode Go connected the page offers one button that adds Go's models, cheap ones as standard",
+  { skip: !PLAYWRIGHT, timeout: 240_000 },
+  async (t) => {
+    const { chromium } = require(PLAYWRIGHT as string);
+    const http = require("node:http");
+    const goServer = http.createServer((_req: any, res: any) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          data: [
+            { id: "glm-5.3-flash" },
+            { id: "kimi-k3" },
+            { id: "muse-spark-1.3-contributor" },
+          ],
+        }),
+      );
+    });
+    await new Promise<void>((r) => goServer.listen(0, "127.0.0.1", r));
+    const goUrl = `http://127.0.0.1:${(goServer.address() as AddressInfo).port}`;
+    const authDir = fs.mkdtempSync(path.join(os.tmpdir(), "e2e-go-"));
+    const cfgPath = path.join(authDir, "config.yaml");
+    const config: Config = {
+      host: "127.0.0.1",
+      port: 0,
+      "auth-dir": authDir,
+      "api-keys": [
+        {
+          name: "boss",
+          key: "sk-boss-0123456789abcdef",
+          models: ["*"],
+          admin: true,
+        },
+      ],
+      "opencode-go": {
+        keys: ["go-key-AAAAAAAAAAAAAAAAAAAA", "go-key-BBBBBBBBBBBBBBBBBBBB"],
+        "base-url": goUrl,
+      },
+      "dashboard-users": [
+        {
+          username: "admin@example.com",
+          "password-hash": await hashPassword("correct horse battery"),
+        },
+      ],
+      "body-limit": "1mb",
+      cloaking: {},
+      timeouts: {
+        "messages-ms": 1000,
+        "stream-messages-ms": 1000,
+        "count-tokens-ms": 1000,
+      },
+      stats: { enabled: false },
+      debug: "off",
+    };
+    const app = createServer(config, buildRegistry(authDir), undefined, {
+      persistKeys: persistApiKeys(cfgPath),
+      persistCatalog: persistCatalog(cfgPath),
+    });
+    const server = app.listen(0, "127.0.0.1");
+    await new Promise<void>((r) => server.once("listening", r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const browser = await chromium.launch({ channel: CHANNEL });
+    t.after(async () => {
+      await browser.close();
+      server.close();
+      goServer.close();
+      fs.rmSync(authDir, { recursive: true, force: true });
+    });
+    const page = await (
+      await browser.newContext({ viewport: { width: 1280, height: 900 } })
+    ).newPage();
+    await page.goto(`${base}/admin/ui`);
+    await page.fill("#username", "admin@example.com");
+    await page.fill("#password", "correct horse battery");
+    await page.click("#connect");
+    await page.waitForSelector("#go-sync");
+    assert.match(
+      await page.textContent("#go-sync-box"),
+      /connected with 2 keys/,
+    );
+    assert.equal(
+      await page
+        .textContent("body")
+        .then((b: string) => b.includes("go-key-AAAA")),
+      false,
+      "no key is ever shown on the page",
+    );
+
+    await page.click("#go-sync");
+    await page.waitForFunction(() =>
+      /Added 2 OpenCode Go models/.test(
+        document.getElementById("status")!.textContent || "",
+      ),
+    );
+    const cheap = page
+      .locator("#models .mrow", { hasText: "GLM-5.3 Flash (OpenCode Go)" })
+      .locator("select");
+    const dear = page
+      .locator("#models .mrow", { hasText: "Kimi K3 (OpenCode Go)" })
+      .locator("select");
+    assert.equal(await cheap.inputValue(), "standard");
+    assert.equal(await dear.inputValue(), "on_request");
+    assert.equal(
+      await page.locator("#models .mrow", { hasText: "muse-spark" }).count(),
+      0,
+      "a model Go trains on is never offered",
+    );
+
+    await page.click("#go-sync");
+    await page.waitForFunction(() =>
+      /already has every OpenCode Go model/.test(
+        document.getElementById("status")!.textContent || "",
+      ),
+    );
   },
 );

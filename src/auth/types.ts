@@ -1,5 +1,8 @@
 export type ProviderId = "anthropic" | "codex" | "cursor";
 
+/** Providers that appear in usage stats: the OAuth ones plus the key-pool OpenCode Go passthrough. */
+export type StatsProviderId = ProviderId | "opencode-go";
+
 export interface PKCECodes {
   codeVerifier: string;
   codeChallenge: string;

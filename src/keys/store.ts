@@ -3,6 +3,7 @@ import {
   ApiKeyEntry,
   KEY_NAME_RE,
   KeyGrant,
+  STANDARD_GROUP,
   generateApiKey,
   isValidModelId,
   validateApiKeyEntry,
@@ -32,6 +33,8 @@ export interface KeyStoreOptions {
   persist?: (entries: ApiKeyEntry[]) => void;
   /** Clock in ms since the epoch; tests replace it. */
   now?: () => number;
+  /** The model ids currently marked "standard"; what the Standard group stands for. */
+  standardIds?: () => string[];
 }
 
 export const MIN_GRANT_MINUTES = 1;
@@ -115,15 +118,27 @@ export class KeyStore {
     if (entry.models.includes("*")) return true;
     const want = resolveModel(model);
     const covers = (m: string) => resolveModel(m) === want;
+    if (entry.models.includes(STANDARD_GROUP) && this.standard().some(covers)) {
+      return true;
+    }
     return (
       entry.models.some(covers) ||
       this.activeGrants(entry, at).some((g) => g.models.some(covers))
     );
   }
 
+  private standard(): string[] {
+    return this.opts.standardIds ? this.opts.standardIds() : [];
+  }
+
   /** Every model id the key may call now, without the "*" wildcard. */
   allowedIds(entry: ApiKeyEntry, at = this.now()): string[] {
-    const ids = new Set(entry.models.filter((m) => m !== "*"));
+    const ids = new Set(
+      entry.models.filter((m) => m !== "*" && m !== STANDARD_GROUP),
+    );
+    if (entry.models.includes(STANDARD_GROUP)) {
+      this.standard().forEach((m) => ids.add(m));
+    }
     for (const g of this.activeGrants(entry, at))
       g.models.forEach((m) => ids.add(m));
     return [...ids];

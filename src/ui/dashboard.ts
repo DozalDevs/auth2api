@@ -146,7 +146,7 @@ h3 { font-size: 14px; margin: 16px 0 4px; color: var(--muted); }
 const JS = String.raw`
 (function () {
   'use strict';
-  var state = { keys: [], usage: null, models: [], modelSource: 'default', days: 1, editing: null, granting: null };
+  var state = { keys: [], usage: null, models: [], modelSource: 'default', days: 1, editing: null, granting: null, go: null };
   var PRESETS = [{ label: '2 hours', minutes: 120 }, { label: '4 hours', minutes: 240 }, { label: '8 hours', minutes: 480 }, { label: '24 hours', minutes: 1440 }];
 
   function $(id) { return document.getElementById(id); }
@@ -243,18 +243,20 @@ const JS = String.raw`
   });
 
   function multiSelect(cfg) {
-    var st = { options: [], selected: [], any: false };
+    var st = { options: [], selected: [], any: false, std: false };
     var btn = h('button', { type: 'button', class: 'ms-btn', 'aria-haspopup': 'true', 'aria-expanded': 'false', 'aria-labelledby': cfg.labelId + ' ' + cfg.id + '-btn', id: cfg.id + '-btn' });
     var btnText = h('span', { text: '' });
     btn.appendChild(btnText);
     btn.appendChild(h('span', { class: 'ms-caret', 'aria-hidden': 'true', text: '\u25be' }));
     var search = h('input', { type: 'text', class: 'ms-search', placeholder: 'Search models', 'aria-label': 'Search models', autocomplete: 'off' });
     var anyCb = h('input', { type: 'checkbox' });
+    var stdCb = h('input', { type: 'checkbox' });
     var anyRow = cfg.allowAny ? h('label', { class: 'ms-row ms-any' }, [anyCb, h('span', { class: 'ms-name', text: 'Any model' })]) : null;
+    var stdRow = cfg.allowStandard ? h('label', { class: 'ms-row ms-any' }, [stdCb, h('span', { class: 'ms-name', text: 'All standard models' }), h('span', { class: 'ms-id', text: 'cheap ones, and any added later' })]) : null;
     var list = h('div', { class: 'ms-list' });
     var clearBtn = h('button', { type: 'button', text: 'Clear' });
     var doneBtn = h('button', { type: 'button', class: 'primary', text: 'Done' });
-    var panel = h('div', { class: 'ms-panel', hidden: true, role: 'group', 'aria-label': cfg.title || 'Models' }, [search, anyRow, list, h('div', { class: 'ms-foot' }, [clearBtn, doneBtn])]);
+    var panel = h('div', { class: 'ms-panel', hidden: true, role: 'group', 'aria-label': cfg.title || 'Models' }, [search, anyRow, stdRow, list, h('div', { class: 'ms-foot' }, [clearBtn, doneBtn])]);
     var chips = h('div', { class: 'ms-chips' });
     var el = h('div', { class: 'ms' }, [btn, chips, panel]);
     var api_ = {
@@ -266,10 +268,11 @@ const JS = String.raw`
         panel.hidden = false; btn.setAttribute('aria-expanded', 'true'); openMs = api_;
         search.value = ''; filter(); search.focus();
       },
-      get: function () { return st.any ? ['*'] : st.selected.slice(); },
+      get: function () { return st.any ? ['*'] : (st.std ? ['@standard'] : []).concat(st.selected); },
       set: function (values) {
         st.any = values.indexOf('*') !== -1;
-        st.selected = values.filter(function (v) { return v !== '*'; });
+        st.std = values.indexOf('@standard') !== -1;
+        st.selected = values.filter(function (v) { return v !== '*' && v !== '@standard'; });
         renderRows(); summary();
       },
       setOptions: function (options) { st.options = options.slice(); renderRows(); summary(); }
@@ -297,6 +300,7 @@ const JS = String.raw`
         list.appendChild(row);
       });
       anyCb.checked = st.any;
+      stdCb.checked = st.std;
       filter();
     }
     function filter() {
@@ -305,8 +309,9 @@ const JS = String.raw`
     }
     function summary() {
       var n = st.selected.length;
-      btnText.textContent = st.any ? 'Any model' : n === 0 ? (cfg.placeholder || 'Choose models') : n === 1 ? labelFor(st.selected[0]) : n + ' models selected';
+      btnText.textContent = st.any ? 'Any model' : (st.std && n === 0) ? 'All standard models' : (st.std ? 'Standard + ' + n + ' more' : n === 0 ? (cfg.placeholder || 'Choose models') : n === 1 ? labelFor(st.selected[0]) : n + ' models selected');
       clear(chips);
+      if (!st.any && st.std) chips.appendChild(h('span', { class: 'chip' }, ['All standard models']));
       if (!st.any) st.selected.forEach(function (v) {
         var x = h('button', { type: 'button', class: 'chip-x', 'aria-label': 'Remove ' + labelFor(v), text: '\u00d7' });
         x.addEventListener('click', function () { st.selected = st.selected.filter(function (s) { return s !== v; }); renderRows(); summary(); });
@@ -322,13 +327,14 @@ const JS = String.raw`
       if (ev.key === 'ArrowDown') { var first = list.querySelector('.ms-row:not([hidden]) input:not(:disabled)'); if (first) { ev.preventDefault(); first.focus(); } }
     });
     anyCb.addEventListener('change', function () { st.any = anyCb.checked; renderRows(); summary(); });
-    clearBtn.addEventListener('click', function () { st.any = false; st.selected = []; renderRows(); summary(); search.focus(); });
+    stdCb.addEventListener('change', function () { st.std = stdCb.checked; renderRows(); summary(); });
+    clearBtn.addEventListener('click', function () { st.any = false; st.std = false; st.selected = []; renderRows(); summary(); search.focus(); });
     doneBtn.addEventListener('click', function () { api_.close(); btn.focus(); });
     return api_;
   }
 
   function catalogOptions() { return state.models.map(function (m) { return { value: m.id, label: m.name }; }); }
-  var keyModels = multiSelect({ id: 'f-models', labelId: 'f-models-label', allowAny: true, placeholder: 'Choose models', title: 'Models this key can use', emptyText: 'No models yet. Add one in the Models section.' });
+  var keyModels = multiSelect({ id: 'f-models', labelId: 'f-models-label', allowAny: true, allowStandard: true, placeholder: 'Choose models', title: 'Models this key can use', emptyText: 'No models yet. Add one in the Models section.' });
   var grantModels = multiSelect({ id: 'g-models', labelId: 'g-models-label', allowAny: false, placeholder: 'Choose models to unlock', title: 'Models to unlock', emptyText: 'No models to unlock.' });
   $('f-models-slot').appendChild(keyModels.el);
   $('g-models-slot').appendChild(grantModels.el);
@@ -369,8 +375,8 @@ const JS = String.raw`
         usage = h('div', {}, [h('div', { title: full(used) + ' of ' + full(k.daily_token_limit), text: short(used) + ' of ' + short(k.daily_token_limit) + ' today' }), meter]);
       } else usage = h('div', {}, [h('div', { title: full(used), text: short(used) + ' today \u00b7 no cap' })]);
 
-      var chips = h('div', { class: 'chips' }, k.models.map(function (m) { return h('span', { class: 'chip', text: m === '*' ? 'Any model' : nameOf(m) }); }));
-      var modelsCell = h('div', {}, [chips, grantPills(k)]);
+      var chips = h('div', { class: 'chips' }, k.models.map(function (m) { return h('span', { class: 'chip', text: m === '*' ? 'Any model' : m === '@standard' ? 'All standard models' : nameOf(m) }); }));
+      var modelsCell = h('div', {}, [chips, k.models.indexOf('*') !== -1 ? h('p', { class: 'hint', text: 'Already has every model. To use Give access, switch this key to a smaller list first.' }) : null, grantPills(k)]);
       var status = h('div', {}, [
         h('span', { class: 'badge ' + (k.disabled ? 'disabled' : 'active'), text: k.disabled ? 'Disabled' : 'Active' }),
         k.admin ? h('span', { class: 'badge admin', text: 'Admin' }) : null
@@ -378,7 +384,7 @@ const JS = String.raw`
       var canGrant = k.models.indexOf('*') === -1;
       var actions = h('div', { class: 'row-actions' }, [
         h('button', { type: 'button', text: 'Edit', onclick: function () { openForm(k); } }),
-        canGrant ? h('button', { type: 'button', text: 'Give access', title: 'Give temporary access to more models', onclick: function () { openGrant(k); } }) : null,
+        h('button', { type: 'button', text: 'Give access', disabled: !canGrant, title: canGrant ? 'Give temporary access to more models' : 'This key can already use every model, so there is nothing to give', onclick: function () { openGrant(k); } }),
         h('button', { type: 'button', text: k.disabled ? 'Enable' : 'Disable', onclick: function () { toggle(k); } }),
         h('button', { type: 'button', class: 'danger', text: 'Delete', onclick: function () { remove(k); } })
       ]);
@@ -495,7 +501,9 @@ const JS = String.raw`
     state.granting = k;
     $('grant-title').textContent = 'Give ' + k.name + ' temporary access';
     var have = {};
+    var std = k.models.indexOf('@standard') !== -1;
     k.models.forEach(function (m) { have[m.toLowerCase()] = true; });
+    state.models.forEach(function (m) { if (std && m.access === 'standard') have[m.id.toLowerCase()] = true; });
     grantModels.setOptions(catalogOptions().filter(function (o) { return !have[o.value.toLowerCase()]; }));
     grantModels.set([]);
     grantState.custom = false; grantState.minutes = 120;
@@ -544,6 +552,13 @@ const JS = String.raw`
     var box = $('models');
     clear(box);
     $('models-note').textContent = state.modelSource === 'default' ? 'Using the built-in list. Change it and your list is saved.' : '';
+    var syncBox = $('go-sync-box');
+    clear(syncBox);
+    if (state.go && state.go.connected) {
+      var n = state.go.keys.length;
+      syncBox.appendChild(h('p', { class: 'hint', text: 'OpenCode Go is connected with ' + n + ' key' + (n === 1 ? '' : 's') + '. Cheap Go models are added as standard and the more expensive ones as on request.' }));
+      syncBox.appendChild(h('button', { type: 'button', id: 'go-sync', text: 'Add or refresh OpenCode Go models', onclick: syncGo }));
+    }
     box.appendChild(h('div', { class: 'mrow head', 'aria-hidden': 'true' }, [h('div', { text: 'Name' }), h('div', { text: 'Model id' }), h('div', { text: 'Listed in OpenCode for' }), h('div', { text: '' })]));
     state.models.forEach(function (m) {
       var sel = accessSelect(m.access, function (value) {
@@ -557,6 +572,16 @@ const JS = String.raw`
       box.appendChild(h('div', { class: 'mrow' }, [h('div', { class: 'name', text: m.name }), h('div', { class: 'muted', text: m.id }), sel, rm]));
     });
     if (!state.models.length) box.appendChild(h('p', { class: 'empty', text: 'No models yet. Add one below.' }));
+  }
+  function syncGo() {
+    var btn = $('go-sync');
+    btn.disabled = true;
+    api('POST', '/admin/go/sync')
+      .then(function (res) {
+        var n = res.added.length;
+        say(n ? 'Added ' + n + ' OpenCode Go model' + (n === 1 ? '' : 's') + ' to the list.' : 'The list already has every OpenCode Go model.', 'ok');
+        return refresh();
+      }).catch(fail).then(function () { var b = $('go-sync'); if (b) b.disabled = false; });
   }
   function submitModel(ev) {
     ev.preventDefault();
@@ -604,11 +629,13 @@ const JS = String.raw`
     $('refresh').disabled = true;
     // Usage is optional: a relay with stats turned off answers 409 there, and that must not stop the keys from loading.
     var usageReq = api('GET', '/admin/usage?days=' + state.days).catch(function (err) { if (err.status === 409) return null; throw err; });
-    return Promise.all([api('GET', '/admin/keys'), usageReq, api('GET', '/admin/models')]).then(function (res) {
+    var goReq = api('GET', '/admin/go').catch(function (err) { if (err.status === 401) throw err; return null; });
+    return Promise.all([api('GET', '/admin/keys'), usageReq, api('GET', '/admin/models'), goReq]).then(function (res) {
       state.keys = res[0].keys;
       state.usage = res[1];
       state.models = res[2].models;
       state.modelSource = res[2].source;
+      state.go = res[3];
       renderKeys();
       renderModels();
       renderUsage();
@@ -792,6 +819,7 @@ const BODY = String.raw`
       </div>
       <p class="hint">These are the models you can give out and that teammates see in OpenCode. Keys can only use what you allow them, whatever is listed here.</p>
       <p id="models-note" class="hint"></p>
+      <div id="go-sync-box" class="mb"></div>
       <div id="models"></div>
       <form id="model-form" class="madd">
         <div>

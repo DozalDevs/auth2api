@@ -54,6 +54,16 @@ export class ModelCatalog {
     return model;
   }
 
+  /** Adds models whose ids are not in the list yet; never changes an existing entry. */
+  addMissing(models: CatalogModel[]): CatalogModel[] {
+    const current = this.list();
+    const have = new Set(current.map((m) => m.id.toLowerCase()));
+    const added = models.filter((m) => !have.has(m.id.toLowerCase()));
+    if (added.length === 0) return [];
+    this.commit([...current, ...added]);
+    return added;
+  }
+
   remove(id: string): void {
     const current = this.list();
     const at = current.findIndex(
