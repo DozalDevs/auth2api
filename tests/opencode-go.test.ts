@@ -68,6 +68,17 @@ async function startFakeOpenCodeGo() {
           }),
         );
       }
+      if (!req.headers["x-opencode-session"]) {
+        res.writeHead(400, { "content-type": "application/json" });
+        return res.end(
+          JSON.stringify({
+            error: {
+              message:
+                "Request is missing x-opencode-session and cannot be routed efficiently.",
+            },
+          }),
+        );
+      }
       seen.push({
         path: req.url || "",
         auth: req.headers.authorization,
@@ -83,6 +94,15 @@ async function startFakeOpenCodeGo() {
           JSON.stringify({
             error: { message: `go says ${status} for ${key.slice(-4)}` },
           }),
+        );
+      }
+      if (
+        req.url?.endsWith("/chat/completions") &&
+        !Array.isArray(body.messages)
+      ) {
+        res.writeHead(400, { "content-type": "application/json" });
+        return res.end(
+          JSON.stringify({ error: { message: "messages is required" } }),
         );
       }
       if (req.url?.includes("/anthropic/")) {
@@ -409,6 +429,77 @@ test("streaming passes through untouched, asks Go to report usage, and counts it
       row.reasoningOutputTokens,
     ],
     [30, 6, 10, 2],
+  );
+});
+
+test("Go refuses a request with no session id, so the relay always supplies one", async (t) => {
+  const go = await startFakeOpenCodeGo();
+  t.after(() => go.close());
+  const { chat } = await startApp(t, go);
+  const plain = await chat(STD, "go/glm-5.3-flash");
+  assert.equal(
+    plain.status,
+    200,
+    "a caller that sends no session header still works",
+  );
+  const made = go.seen.at(-1)!.session!;
+  assert.match(made, /^relay-[0-9a-f]{16}$/);
+  await chat(STD, "go/glm-5.3-flash");
+  assert.equal(
+    go.seen.at(-1)!.session,
+    made,
+    "the same caller gets the same id every time",
+  );
+  await chat(ADMIN, "go/glm-5.3-flash");
+  assert.notEqual(
+    go.seen.at(-1)!.session,
+    made,
+    "a different caller gets a different id",
+  );
+  await chat(
+    STD,
+    "go/glm-5.3-flash",
+    {},
+    { "x-opencode-session": "from-opencode" },
+  );
+  assert.equal(
+    go.seen.at(-1)!.session,
+    "from-opencode",
+    "a caller's own id wins",
+  );
+  await chat(
+    STD,
+    "go/glm-5.3-flash",
+    {},
+    { "x-claude-code-session-id": "cc-42" },
+  );
+  assert.equal(
+    go.seen.at(-1)!.session,
+    "cc-42",
+    "another client's session id is reused",
+  );
+});
+
+test("a request Go rejects as malformed does not make the pool prefer the key that said so", async (t) => {
+  const go = await startFakeOpenCodeGo();
+  t.after(() => go.close());
+  const { call, chat } = await startApp(t, go);
+  go.refuse.set(GO_A, 429);
+  const bad = await call("POST", "/v1/chat/completions", STD, {
+    model: "go/glm-5.3-flash",
+  });
+  assert.equal(
+    bad.status,
+    400,
+    "A was at its limit, B answered 400 because the request itself was malformed",
+  );
+  go.refuse.delete(GO_A);
+  go.seen.length = 0;
+  assert.equal((await chat(STD, "go/glm-5.3-flash")).status, 200);
+  assert.equal(
+    go.seen[0].auth!.slice(-4),
+    "AAAA",
+    "B's 400 said nothing about B, so A is still tried first",
   );
 });
 

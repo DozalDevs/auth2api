@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import express from "express";
 import { Config } from "../config";
 import { GoKeyPool } from "./pool";
@@ -86,10 +87,20 @@ export function createGoHandler(
       // Go asks clients to identify themselves rather than look like a generic HTTP library.
       "user-agent": "dozaldevs-relay/1.0",
     };
-    const session = req.headers["x-opencode-session"];
-    if (typeof session === "string" && /^[\x21-\x7e]{1,200}$/.test(session)) {
-      baseHeaders["x-opencode-session"] = session;
-    }
+    // Go refuses a request with no session id, so every request carries one: the
+    // caller's own if it sent one, otherwise a stable id for that caller, so Go
+    // can still route and cache sensibly.
+    const sessionOk = (v: unknown): v is string =>
+      typeof v === "string" && /^[\x21-\x7e]{1,200}$/.test(v);
+    const claude = req.headers["x-claude-code-session-id"];
+    const given = [req.headers["x-opencode-session"], claude].find(sessionOk);
+    const caller =
+      (res.locals.keyEntry as { name?: string } | undefined)?.name ??
+      "anonymous";
+    baseHeaders["x-opencode-session"] =
+      given ??
+      `relay-${crypto.createHash("sha256").update(caller).digest("hex").slice(0, 16)}`;
+    if (sessionOk(claude)) baseHeaders["x-claude-code-session-id"] = claude;
     for (const h of ["anthropic-version", "anthropic-beta"]) {
       const v = req.headers[h];
       if (typeof v === "string" && /^[\x20-\x7e]{1,200}$/.test(v))
@@ -136,7 +147,7 @@ export function createGoHandler(
         };
         continue;
       }
-      pool.markGood(upstreamModel, index);
+      if (up.status < 400) pool.markGood(upstreamModel, index);
       if (stats) stats.accountEmail = pool.label(index);
       await relayReply(up, res, stats);
       return;
