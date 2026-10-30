@@ -223,6 +223,35 @@ test(
     await maria.waitForSelector("#ask-model");
     assert.equal(await maria.inputValue("#ask-model"), "gpt-6-sol");
 
+    // Set up a computer: the page makes a one-time command, and the key itself is never on the page.
+    await maria.click("#setup summary");
+    await maria.click("#setup-get");
+    await maria.waitForSelector("#setup-body .code");
+    const mac = (await maria
+      .locator("#setup-body .code")
+      .first()
+      .textContent())!;
+    assert.match(
+      mac,
+      /^curl -fsSL http\S+\/setup\/opencode\.sh \| RELAY_SETUP_CODE=[A-Za-z0-9_-]+ bash$/,
+    );
+    assert.match(
+      (await maria.locator("#setup-body .code").nth(1).textContent())!,
+      /^\$env:RELAY_SETUP_CODE='[A-Za-z0-9_-]+'; .*opencode\.ps1\)\)\)$/,
+    );
+    const code = mac.match(/RELAY_SETUP_CODE=([A-Za-z0-9_-]+)/)![1];
+    const redeemed = await fetch(`${base}/setup/redeem`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code }),
+    }).then((r) => r.json());
+    assert.equal(redeemed.key, "sk-maria-0123456789abcdef");
+    assert.equal(
+      (await maria.locator("body").innerText()).includes("sk-maria-"),
+      false,
+      "the key is never on her page",
+    );
+
     // Signing out and back in works; removing the sign-in locks her out.
     await maria.click("#signout");
     await maria.waitForSelector("#login:not([hidden])");

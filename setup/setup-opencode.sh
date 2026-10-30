@@ -4,6 +4,7 @@
 # DozalDevs AI relay, using the personal API key you were given.
 #
 # Run it:       bash setup-opencode.sh
+# With a code:  RELAY_SETUP_CODE=<code from your page> bash setup-opencode.sh   (no key to paste)
 # Check later:  bash setup-opencode.sh --check     (changes nothing; proves your key and models work)
 # Re-run it any time: it updates the setup in place (for example after you are given more models).
 #
@@ -45,6 +46,7 @@ for arg in "$@"; do
     -h | --help)
       say "Connects OpenCode on this computer to the DozalDevs AI relay with your personal key."
       say "  bash setup-opencode.sh           set everything up (asks for your key)"
+      say "  RELAY_SETUP_CODE=<code> bash setup-opencode.sh   set everything up with a code from your page (no key to paste)"
       say "  bash setup-opencode.sh --check   change nothing; prove your key and models work"
       exit 0
       ;;
@@ -270,6 +272,17 @@ if [ "$CHECK" = 1 ]; then
   KEY="$(cat "$KEY_FILE")"
 else
   KEY="${RELAY_API_KEY:-}"
+  if [ -z "$KEY" ] && [ -n "${RELAY_SETUP_CODE:-}" ]; then
+    say "Using your setup code..." >&2
+    printf '{"code":"%s"}' "$(printf '%s' "$RELAY_SETUP_CODE" | tr -cd 'A-Za-z0-9_-')" >"$TMP_DIR/redeem"
+    code_status="$(curl -sS --max-time 30 -o "$BODY_FILE" -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+      -d "@$TMP_DIR/redeem" "$RELAY_URL/setup/redeem" 2>/dev/null || true)"
+    case "${code_status:-000}" in
+      200) KEY="$(sed -n 's/.*"key":"\([^"]*\)".*/\1/p' "$BODY_FILE" | head -1)" ;;
+      000) die "could not reach $RELAY_URL. Check your internet connection and try again." ;;
+      *) die "your setup code did not work ($(sed -n 's/.*"message":"\([^"]*\)".*/\1/p' "$BODY_FILE" | head -1)). Get a new command from your page and run it again." ;;
+    esac
+  fi
   if [ -z "$KEY" ]; then
     [ -r /dev/tty ] || die "no terminal to ask for your key. Run this in a Terminal window, or set RELAY_API_KEY."
     printf 'Paste your relay API key (nothing shows as you type), then press Return: ' >&2

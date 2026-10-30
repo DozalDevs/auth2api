@@ -163,6 +163,15 @@ export interface Invite {
   "created-by": string;
 }
 
+/** A one-time link that lets a teammate become a dashboard admin. Only the hash of the token is kept. */
+export interface AdminInvite {
+  "token-hash": string;
+  email: string;
+  "created-at": string;
+  "expires-at": string;
+  "created-by": string;
+}
+
 export interface SlackConfig {
   "bot-token": string;
   /** Channel id, for example C0BBNMMCS49. */
@@ -186,6 +195,7 @@ export interface Config {
   "access-requests"?: AccessRequest[];
   members?: Member[];
   invites?: Invite[];
+  "admin-invites"?: AdminInvite[];
   notifications?: NotificationsConfig;
   /** The address people use to reach this relay, for links in messages. No trailing slash. */
   "public-url"?: string;
@@ -567,6 +577,38 @@ export function validateInvites(list: unknown): Invite[] {
   });
 }
 
+export function validateAdminInvites(list: unknown): AdminInvite[] {
+  if (list === undefined || list === null) return [];
+  if (!Array.isArray(list)) throw new Error("admin-invites must be a list");
+  return list.map((v, i) => {
+    const o = (v ?? {}) as Record<string, unknown>;
+    const where = `admin-invites[${i}]`;
+    if (
+      typeof o["token-hash"] !== "string" ||
+      !TOKEN_HASH_RE.test(o["token-hash"])
+    ) {
+      throw new Error(`${where}: token-hash must be a sha256 hex string`);
+    }
+    if (typeof o.email !== "string" || !EMAIL_RE.test(o.email)) {
+      throw new Error(`${where}: email must be an email address`);
+    }
+    for (const f of ["created-at", "expires-at"]) {
+      const t = o[f];
+      if (typeof t !== "string" || Number.isNaN(Date.parse(t))) {
+        throw new Error(`${where}: ${f} must be a timestamp`);
+      }
+    }
+    return {
+      "token-hash": o["token-hash"],
+      email: o.email.toLowerCase(),
+      "created-at": o["created-at"] as string,
+      "expires-at": o["expires-at"] as string,
+      "created-by":
+        typeof o["created-by"] === "string" ? o["created-by"] : "an admin",
+    };
+  });
+}
+
 export function validateNotifications(
   value: unknown,
 ): NotificationsConfig | undefined {
@@ -701,6 +743,7 @@ export function loadConfig(configPath?: string): Config {
     });
   raw.members = keep(raw.members, "sign-in");
   raw.invites = keep(raw.invites, "invite");
+  raw["admin-invites"] = validateAdminInvites(raw["admin-invites"]);
   if (
     !raw.stats.enabled &&
     raw["api-keys"].some((k) => k["daily-token-limit"] !== undefined)
@@ -750,6 +793,18 @@ export function persistMembers(filePath: string): (members: Member[]) => void {
 
 export function persistInvites(filePath: string): (invites: Invite[]) => void {
   return persistSection(filePath, "invites");
+}
+
+export function persistDashboardUsers(
+  filePath: string,
+): (users: DashboardUser[]) => void {
+  return persistSection(filePath, "dashboard-users");
+}
+
+export function persistAdminInvites(
+  filePath: string,
+): (invites: AdminInvite[]) => void {
+  return persistSection(filePath, "admin-invites");
 }
 
 export function persistCatalog(

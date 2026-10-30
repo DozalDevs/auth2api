@@ -22,17 +22,23 @@ import {
 } from "./keys/requests";
 import {
   AccessRequest,
+  AdminInvite,
   ApiKeyEntry,
   CatalogModel,
+  DashboardUser,
   Invite,
   Member,
 } from "./config";
+import { AdminLogins } from "./members/admins";
 import { MemberStore } from "./members/store";
 import {
   originOf,
   registerAccountRoutes,
   registerMemberAdminRoutes,
+  registerSetupRedeemRoute,
+  registerTeamRoutes,
 } from "./members/routes";
+import { SetupCodeStore } from "./members/setup-codes";
 import { SlackNotifier } from "./notify/slack";
 import { ACCOUNT_CSP, ACCOUNT_HTML } from "./ui/account";
 import { ModelCatalog } from "./models/catalog";
@@ -68,6 +74,8 @@ export function createServer(
     persistRequests?: (requests: AccessRequest[]) => void;
     persistMembers?: (members: Member[]) => void;
     persistInvites?: (invites: Invite[]) => void;
+    persistDashboardUsers?: (users: DashboardUser[]) => void;
+    persistAdminInvites?: (invites: AdminInvite[]) => void;
     now?: () => number;
   } = {},
 ): express.Application {
@@ -99,6 +107,17 @@ export function createServer(
     persistInvites: opts.persistInvites,
     now: opts.now,
   });
+  const admins = new AdminLogins(
+    config["dashboard-users"] ?? [],
+    config["admin-invites"] ?? [],
+    {
+      persistUsers: opts.persistDashboardUsers,
+      persistInvites: opts.persistAdminInvites,
+      now: opts.now,
+    },
+  );
+  const setupCodes = new SetupCodeStore(opts.now);
+  const setupThrottle = new LoginThrottle();
   const memberSessions = new SessionStore();
   const memberLoginThrottle = new LoginThrottle();
   const slack = config.notifications?.slack;
@@ -318,7 +337,14 @@ export function createServer(
     sessions: memberSessions,
     loginThrottle: memberLoginThrottle,
     rateLimit,
+    setupCodes,
     onRequestCreated: announceRequest,
+  });
+  registerSetupRedeemRoute(app, {
+    keys: keyStore,
+    codes: setupCodes,
+    throttle: setupThrottle,
+    rateLimit,
   });
 
   const requireAdmin: express.RequestHandler = (_req, res, next) => {
@@ -352,7 +378,7 @@ export function createServer(
       return;
     }
     const username = await checkLogin(
-      config["dashboard-users"] ?? [],
+      admins.list(),
       req.body?.username,
       req.body?.password,
     );
@@ -369,6 +395,36 @@ export function createServer(
       `${SESSION_COOKIE}=${sessions.create(username)}; Max-Age=${SESSION_TTL_MS / 1000}; ${cookieFlags(req)}`,
     );
     res.json({ username });
+  });
+
+  app.post("/admin/ui/accept", async (req, res) => {
+    const ip = clientIp(req);
+    if (loginThrottle.blocked(ip)) {
+      res.status(429).json({
+        error: {
+          message: "Too many failed attempts. Try again in a few minutes.",
+        },
+      });
+      return;
+    }
+    try {
+      const username = await admins.accept(req.body?.token, req.body?.password);
+      loginThrottle.succeed(ip);
+      res.setHeader(
+        "Set-Cookie",
+        `${SESSION_COOKIE}=${sessions.create(username)}; Max-Age=${SESSION_TTL_MS / 1000}; ${cookieFlags(req)}`,
+      );
+      res.status(201).json({ username });
+    } catch (err: any) {
+      if (typeof err?.status === "number" && err.status < 500) {
+        loginThrottle.fail(ip);
+        res.status(err.status).json({ error: { message: err.message } });
+        return;
+      }
+      res
+        .status(500)
+        .json({ error: { message: "Could not finish. Try again." } });
+    }
   });
 
   app.get("/admin/ui/session", (req, res) => {
@@ -397,7 +453,8 @@ export function createServer(
   // that cross-site requests cannot add without a CORS preflight.
   const adminAuth: express.RequestHandler = (req, res, next) => {
     const token = extractApiKey(req.headers) ? undefined : sessionToken(req);
-    const username = token && sessions.get(token);
+    const found = token && sessions.get(token);
+    const username = found && admins.has(found) ? found : undefined;
     if (!username) return requireApiKey(req, res, next);
     if (req.headers["x-relay-csrf"] !== "1") {
       res
@@ -421,6 +478,7 @@ export function createServer(
   app.use("/admin", requireAdmin);
   registerKeyRoutes(app, keyStore, statsRecorder, catalog, members);
   registerMemberAdminRoutes(app, { keys: keyStore, members, publicUrl });
+  registerTeamRoutes(app, { admins, publicUrl });
   registerGoAdminRoutes(app, config, goPool, catalog);
   registerRequestAdminRoutes(app, accessRequests, keyStore);
 

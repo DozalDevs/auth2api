@@ -5,8 +5,10 @@ import {
   Config,
   loadConfig,
   persistAccessRequests,
+  persistAdminInvites,
   persistApiKeys,
   persistCatalog,
+  persistDashboardUsers,
   persistInvites,
   persistMembers,
   resolveAuthDir,
@@ -191,6 +193,8 @@ async function startServer(): Promise<void> {
     persistRequests: persistAccessRequests(configPath || "config.yaml"),
     persistMembers: persistMembers(configPath || "config.yaml"),
     persistInvites: persistInvites(configPath || "config.yaml"),
+    persistDashboardUsers: persistDashboardUsers(configPath || "config.yaml"),
+    persistAdminInvites: persistAdminInvites(configPath || "config.yaml"),
   });
   const host = config.host || "127.0.0.1";
   const port = config.port;

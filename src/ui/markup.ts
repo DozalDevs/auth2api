@@ -19,6 +19,26 @@ export const BODY = String.raw`
     </div>
   </section>
 
+  <section id="welcome" class="login" hidden>
+    <div class="card">
+      <h1>Welcome</h1>
+      <p class="muted">Choose a password to finish setting up your dashboard login.</p>
+      <form id="welcome-form">
+        <div>
+          <label for="new-password">Password</label>
+          <input id="new-password" type="password" autocomplete="new-password" minlength="12" required>
+          <p class="hint">At least 12 characters. A few random words works well.</p>
+        </div>
+        <div>
+          <label for="new-password2">Type it again</label>
+          <input id="new-password2" type="password" autocomplete="new-password" required>
+        </div>
+        <p id="welcome-error" class="hint err" role="alert"></p>
+        <button id="welcome-save" class="primary" type="submit">Save and continue</button>
+      </form>
+    </div>
+  </section>
+
   <div id="app" hidden>
     <header class="top">
       <div>
@@ -27,7 +47,10 @@ export const BODY = String.raw`
       </div>
       <div class="who">
         <span id="who"></span>
-        <button id="signout" class="link" type="button">Sign out</button>
+        <div class="whoacts">
+          <button id="open-team" class="link" type="button">Team</button>
+          <button id="signout" class="link" type="button">Sign out</button>
+        </div>
       </div>
     </header>
 
@@ -108,6 +131,34 @@ export const BODY = String.raw`
         </div>
       </div>
       <div id="usage"></div>
+    </section>
+
+    <section id="panel-team" role="tabpanel" aria-labelledby="tab-team" hidden>
+      <div id="team-link-panel" class="secret-box" hidden>
+        <h2>Sign-in link for <span id="team-link-name"></span></h2>
+        <div class="secret-top">
+          <span class="muted" id="team-link-note"></span>
+          <button id="team-link-copy" class="primary quiet" type="button">Copy link</button>
+        </div>
+        <code id="team-link-value" class="secret"></code>
+        <div class="actions"><button id="team-link-done" type="button">Done</button></div>
+      </div>
+      <div id="team-bar" class="bar"></div>
+      <form id="team-form" class="formcard" hidden>
+        <h2>Invite someone to the dashboard</h2>
+        <div class="fields">
+          <div>
+            <label for="t-email">Their email</label>
+            <input id="t-email" type="text" inputmode="email" required autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="leo@example.com">
+            <p class="hint">You get a one-time link to send them. They choose a password and sign in with this email. It works for 7 days.</p>
+          </div>
+        </div>
+        <div class="actions">
+          <button id="t-save" class="primary" type="submit">Create link</button>
+          <button id="t-cancel" type="button">Cancel</button>
+        </div>
+      </form>
+      <div id="team"></div>
     </section>
 
     <div id="form-holder" hidden>

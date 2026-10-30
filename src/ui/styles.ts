@@ -44,6 +44,8 @@ label, .label { display: block; font-weight: 600; font-size: 14px; margin-bottom
 .top { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 4px 0 18px; }
 .top h1 { font-size: 22px; line-height: 1.2; font-weight: 700; letter-spacing: -.01em; }
 .top .host { font-size: 13px; color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
+.whoacts { display: flex; gap: 14px; align-items: center; }
+.whoacts .link[aria-current=page] { font-weight: 700; text-decoration-thickness: 2px; }
 .who { display: flex; align-items: center; gap: 12px; font-size: 14px; color: var(--muted); flex-wrap: wrap; justify-content: flex-end; text-align: right; }
 
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 20px; overflow-x: auto; scrollbar-width: none; }

@@ -3,12 +3,13 @@ import { SHARED_JS } from "./shared";
 export const JS = String.raw`
 (function () {
   'use strict';
-  var TABS = ['requests', 'keys', 'models', 'usage'];
+  var TABS = ['requests', 'keys', 'models', 'usage', 'team'];
+  var NAV_TABS = ['requests', 'keys', 'models', 'usage'];
   var PRESETS = [{ label: '2 hours', minutes: 120 }, { label: '4 hours', minutes: 240 }, { label: '8 hours', minutes: 480 }, { label: '24 hours', minutes: 1440 }];
   var SEARCH_AFTER = 8;
   var state = {
     loaded: false, loadError: null, lastLoad: 0,
-    keys: [], usage: null, statsOff: false, models: [], go: null, requests: [],
+    keys: [], usage: null, statsOff: false, models: [], go: null, requests: [], team: null, teamForm: null,
     tab: null, days: 1,
     adding: false, editing: null, granting: null, inviting: null, addingModel: false,
     keyFilter: '', modelFilter: '', decidedOpen: false, newModelAccess: 'on_request'
@@ -50,6 +51,7 @@ export const JS = String.raw`
 
   function showLogin(message) {
     $('app').hidden = true;
+    $('welcome').hidden = true;
     $('login').hidden = false;
     $('login-error').textContent = message || '';
     $('password').value = '';
@@ -88,23 +90,27 @@ export const JS = String.raw`
       var on = state.loaded && t === cur;
       $('panel-' + t).hidden = !on;
       var b = $('tab-' + t);
+      if (!b) return;
       b.setAttribute('aria-selected', String(on));
-      b.tabIndex = t === cur ? 0 : -1;
+      b.tabIndex = t === cur || (cur === 'team' && t === 'requests') ? 0 : -1;
     });
+    if (state.loaded && cur === 'team') $('open-team').setAttribute('aria-current', 'page');
+    else $('open-team').removeAttribute('aria-current');
   }
   function goTab(tab, push) {
     state.tab = tab;
     if (push) urlSet({ tab: tab }, false);
     applyTab();
   }
-  TABS.forEach(function (t, i) {
+  $('open-team').addEventListener('click', function () { goTab('team', true); });
+  NAV_TABS.forEach(function (t, i) {
     var b = $('tab-' + t);
     b.addEventListener('click', function () { goTab(t, true); });
     b.addEventListener('keydown', function (ev) {
-      var next = ev.key === 'ArrowRight' ? i + 1 : ev.key === 'ArrowLeft' ? i - 1 : ev.key === 'Home' ? 0 : ev.key === 'End' ? TABS.length - 1 : -1;
+      var next = ev.key === 'ArrowRight' ? i + 1 : ev.key === 'ArrowLeft' ? i - 1 : ev.key === 'Home' ? 0 : ev.key === 'End' ? NAV_TABS.length - 1 : -1;
       if (next < 0) return;
       ev.preventDefault();
-      var to = TABS[(next + TABS.length) % TABS.length];
+      var to = NAV_TABS[(next + NAV_TABS.length) % NAV_TABS.length];
       goTab(to, true);
       $('tab-' + to).focus();
     });
@@ -800,6 +806,74 @@ export const JS = String.raw`
     }).catch(fail);
   }
 
+  // ---- Team (who can sign in to this dashboard) ----
+  var inviteAdminBtn = h('button', { type: 'button', class: 'primary', id: 'invite-admin', text: 'Invite an admin' });
+  $('team-bar').appendChild(h('div', { class: 'bar-left counting' }, [h('span', { class: 'title', id: 'team-count' })]));
+  $('team-bar').appendChild(h('div', { class: 'acts' }, [inviteAdminBtn]));
+  inviteAdminBtn.addEventListener('click', function () { openTeamForm(''); });
+  function openTeamForm(email) {
+    state.teamForm = true;
+    $('t-email').value = email || '';
+    $('team-link-panel').hidden = true;
+    renderTeam();
+    $('t-email').focus();
+  }
+  function closeTeamForm() { state.teamForm = false; renderTeam(); }
+  $('t-cancel').addEventListener('click', closeTeamForm);
+  $('team-form').addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    var btn = $('t-save');
+    btn.disabled = true;
+    api('POST', '/admin/team/invite', { email: $('t-email').value.trim() })
+      .then(function (res) {
+        state.teamForm = false;
+        $('team-link-name').textContent = res.email;
+        $('team-link-note').textContent = 'Send this to ' + res.email + '. It works once and expires ' + when(res.expires_at) + '.';
+        $('team-link-value').textContent = res.link;
+        $('team-link-copy').textContent = 'Copy link';
+        $('team-link-panel').hidden = false;
+        say('Link ready for ' + res.email + '.', 'ok');
+        return load();
+      }).catch(fail).then(function () { btn.disabled = false; });
+  });
+  $('team-link-copy').addEventListener('click', function () {
+    var text = $('team-link-value').textContent;
+    var done = function () { $('team-link-copy').textContent = 'Copied'; };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, function () { selectNode($('team-link-value')); });
+    else selectNode($('team-link-value'));
+  });
+  $('team-link-done').addEventListener('click', function () { $('team-link-value').textContent = ''; $('team-link-panel').hidden = true; });
+  function removeAdmin(a) {
+    confirmDialog({ title: 'Remove ' + a.username + "'s dashboard login?", body: (a.you ? 'You will be signed out right away. ' : a.username + ' is signed out right away. ') + 'This does not touch any keys.', yes: 'Remove login', no: 'Keep it' }).then(function (yes) {
+      if (!yes) return;
+      return api('DELETE', '/admin/team/' + encodeURIComponent(a.username)).then(function () { say('Removed ' + a.username + '.', 'ok'); return load(); }).catch(fail);
+    });
+  }
+  function cancelAdminInvite(i) {
+    api('DELETE', '/admin/team/invites/' + encodeURIComponent(i.email)).then(function () { say('Cancelled the invite for ' + i.email + '.', 'ok'); return load(); }).catch(fail);
+  }
+  function renderTeam() {
+    var box = $('team');
+    clear(box);
+    var t = state.team;
+    $('team-form').hidden = !state.teamForm;
+    inviteAdminBtn.hidden = !!state.teamForm || !t;
+    if (!t) { box.appendChild(h('div', { class: 'card' }, [stateBox('Team is not available', 'This relay could not load the list of dashboard logins.')])); return; }
+    $('team-count').textContent = plural(t.admins.length, 'dashboard login');
+    var card = h('div', { class: 'card' });
+    t.admins.forEach(function (a) {
+      var items = [{ text: 'Send a new sign-in link', run: function () { openTeamForm(a.username); } }];
+      if (t.admins.length > 1) { items.push('sep'); items.push({ text: 'Remove login', bad: true, run: function () { removeAdmin(a); } }); }
+      var menu = rowMenu('More actions for ' + a.username, items);
+      card.appendChild(h('div', { class: 'mrow' }, [h('div', { class: 'm-name' }, [h('strong', { text: a.username }), a.you ? h('span', { class: 'tags' }, [h('span', { class: 'chip strong', text: 'You' })]) : null]), h('span'), menu.el]));
+    });
+    t.invites.forEach(function (i) {
+      var menu = rowMenu('More actions for the invite to ' + i.email, [{ text: 'Send a new sign-in link', run: function () { openTeamForm(i.email); } }, 'sep', { text: 'Cancel invite', bad: true, run: function () { cancelAdminInvite(i); } }]);
+      card.appendChild(h('div', { class: 'mrow' }, [h('div', { class: 'm-name' }, [h('strong', { text: i.email }), h('span', { class: 'tags' }, [h('span', { class: 'chip', text: 'Invite pending' })])]), h('span', { class: 'muted small', text: 'Link expires ' + when(i.expires_at) }), menu.el]));
+    });
+    box.appendChild(card);
+  }
+
   // ---- Loading everything ----
   function renderAll() {
     var failed = !state.loaded && state.loadError;
@@ -813,19 +887,22 @@ export const JS = String.raw`
     renderKeys();
     renderModels();
     renderUsage();
+    renderTeam();
     syncPeriod();
     applyTab();
   }
   function load() {
     var usageReq = api('GET', '/admin/usage?days=' + state.days).then(function (u) { return { usage: u, off: false }; }, function (err) { if (err.status === 409) return { usage: null, off: true }; throw err; });
     var goReq = api('GET', '/admin/go').catch(function (err) { if (err.status === 401) throw err; return null; });
+    var teamReq = api('GET', '/admin/team').catch(function (err) { if (err.status === 401) throw err; return null; });
     var reqReq = api('GET', '/admin/access-requests?status=all').catch(function (err) { if (err.status === 401) throw err; return null; });
-    return Promise.all([api('GET', '/admin/keys'), usageReq, api('GET', '/admin/models'), goReq, reqReq]).then(function (res) {
+    return Promise.all([api('GET', '/admin/keys'), usageReq, api('GET', '/admin/models'), goReq, reqReq, teamReq]).then(function (res) {
       state.keys = res[0].keys;
       state.usage = res[1].usage; state.statsOff = res[1].off;
       state.models = res[2].models;
       state.go = res[3];
       state.requests = res[4] ? res[4].requests : [];
+      state.team = res[5];
       state.loaded = true; state.loadError = null; state.lastLoad = Date.now();
       renderAll();
     }).catch(function (err) {
@@ -851,6 +928,7 @@ export const JS = String.raw`
   }, 15000);
 
   function enter(username) {
+    $('welcome').hidden = true;
     var u = urlGet();
     state.tab = u.tab; state.days = u.days;
     $('password').value = '';
@@ -890,6 +968,32 @@ export const JS = String.raw`
   $('copy-btn').addEventListener('click', copySecret);
   $('secret-done').addEventListener('click', function () { $('secret-value').textContent = ''; $('secret-panel').hidden = true; });
 
-  api('GET', '/admin/ui/session').then(function (res) { enter(res.username); }).catch(function () { showLogin(''); });
+  var inviteToken = null;
+  $('welcome-form').addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    var p1 = $('new-password').value, p2 = $('new-password2').value;
+    $('welcome-error').textContent = '';
+    if (p1.length < 12) { $('welcome-error').textContent = 'Use at least 12 characters.'; return; }
+    if (p1 !== p2) { $('welcome-error').textContent = 'The two passwords are different.'; return; }
+    $('welcome-save').disabled = true;
+    api('POST', '/admin/ui/accept', { token: inviteToken, password: p1 })
+      .then(function (res) {
+        inviteToken = null;
+        history.replaceState(null, '', location.pathname + location.search);
+        $('new-password').value = ''; $('new-password2').value = '';
+        enter(res.username);
+      })
+      .catch(function (err) { $('welcome-error').textContent = err.message; })
+      .then(function () { $('welcome-save').disabled = false; });
+  });
+  var inviteMatch = /^#invite=([A-Za-z0-9_-]{20,200})$/.exec(location.hash);
+  if (inviteMatch) {
+    inviteToken = inviteMatch[1];
+    $('login').hidden = true;
+    $('welcome').hidden = false;
+    $('new-password').focus();
+  } else {
+    api('GET', '/admin/ui/session').then(function (res) { enter(res.username); }).catch(function () { showLogin(''); });
+  }
 })();
 `;

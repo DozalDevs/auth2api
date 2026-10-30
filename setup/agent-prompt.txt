@@ -30,6 +30,9 @@ WHAT TO DO
    Then give them exactly ONE command to copy and paste into that window, and press Return:
    Mac or Linux:  curl -fsSL __RELAY_URL__/setup/opencode.sh | bash
    Windows:       [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; & ([scriptblock]::Create((irm __RELAY_URL__/setup/opencode.ps1)))
+   If they have already signed in to their own page at __RELAY_URL__/account, they can instead copy the
+   command from "Set up OpenCode on a computer" there. It carries a one-time code, so it asks for no key at
+   all. Never ask them to read that code out to you.
    Tell them: it will ask for their key. They paste the key (nothing shows as they paste, on purpose) and
    press Return. It takes about half a minute and ends with the words "All set". Ask them to tell you
    when it is finished, or to tell you what it printed if it stopped.
