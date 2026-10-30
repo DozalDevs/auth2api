@@ -12,7 +12,9 @@ import { StatsRecorder } from "../stats/recorder";
 import { hashApiKey } from "../utils/common";
 import { clientIp } from "../utils/rate-limit";
 import { resolveModel } from "../upstream/translator";
+import { AdminLogins } from "./admins";
 import { MemberStore } from "./store";
+import { SetupCodeStore } from "./setup-codes";
 
 export const MEMBER_COOKIE = "relay_member";
 const COOKIE_PATH = "/account";
@@ -85,6 +87,64 @@ export function registerMemberAdminRoutes(
   );
 }
 
+export interface TeamDeps {
+  admins: AdminLogins;
+  publicUrl?: string;
+}
+
+export function registerTeamRoutes(
+  app: express.Application,
+  deps: TeamDeps,
+): void {
+  const who = (res: express.Response): string =>
+    (res.locals.keyEntry as ApiKeyEntry | undefined)?.name ?? "an admin";
+
+  app.get(
+    "/admin/team",
+    handle((_req, res) => {
+      const me = who(res).toLowerCase();
+      res.json({
+        admins: deps.admins.list().map((u) => ({
+          username: u.username,
+          you: u.username.toLowerCase() === me,
+        })),
+        invites: deps.admins
+          .pending()
+          .map((i) => ({ email: i.email, expires_at: i["expires-at"] })),
+      });
+    }),
+  );
+
+  app.post(
+    "/admin/team/invite",
+    handle((req, res) => {
+      const { token, invite } = deps.admins.invite(req.body?.email, who(res));
+      const base = deps.publicUrl ?? originOf(req);
+      res.status(201).json({
+        email: invite.email,
+        expires_at: invite["expires-at"],
+        link: `${base}/admin/ui#invite=${token}`,
+      });
+    }),
+  );
+
+  app.delete(
+    "/admin/team/invites/:email",
+    handle((req, res) => {
+      deps.admins.cancelInvite(req.params.email);
+      res.status(204).end();
+    }),
+  );
+
+  app.delete(
+    "/admin/team/:username",
+    handle((req, res) => {
+      deps.admins.remove(req.params.username, who(res));
+      res.status(204).end();
+    }),
+  );
+}
+
 export interface AccountDeps {
   keys: KeyStore;
   catalog: ModelCatalog;
@@ -94,7 +154,49 @@ export interface AccountDeps {
   sessions: SessionStore;
   loginThrottle: LoginThrottle;
   rateLimit: express.RequestHandler;
+  setupCodes: SetupCodeStore;
   onRequestCreated?: (created: AccessRequest) => void;
+}
+
+export interface RedeemDeps {
+  keys: KeyStore;
+  codes: SetupCodeStore;
+  throttle: LoginThrottle;
+  rateLimit: express.RequestHandler;
+}
+
+export function registerSetupRedeemRoute(
+  app: express.Application,
+  deps: RedeemDeps,
+): void {
+  app.post("/setup/redeem", deps.rateLimit, (req, res) => {
+    const ip = clientIp(req);
+    res.set("Cache-Control", "no-store");
+    if (deps.throttle.blocked(ip)) {
+      res.status(429).json({
+        error: {
+          message:
+            "Too many tries. Wait a few minutes and get a new command from your page.",
+        },
+      });
+      return;
+    }
+    const name = deps.codes.redeem(req.body?.code);
+    const entry = name ? deps.keys.get(name) : undefined;
+    if (!entry || entry.disabled) {
+      deps.throttle.fail(ip);
+      res.status(400).json({
+        error: {
+          message:
+            "this setup code is not valid, or it was already used or expired. Get a new command from your page.",
+        },
+      });
+      return;
+    }
+    deps.throttle.succeed(ip);
+    console.log(`[account] setup code redeemed for "${entry.name}"`);
+    res.json({ key: entry.key });
+  });
 }
 
 function cookieFlags(req: express.Request): string {
@@ -365,6 +467,22 @@ export function registerAccountRoutes(
       });
       deps.onRequestCreated?.(created);
       res.status(201).json(describeRequest(created, deps.keys.now()));
+    }),
+  );
+
+  app.post(
+    "/account/api/setup-code",
+    signedIn,
+    handle((_req, res) => {
+      const { entry } = me(res);
+      if (entry.disabled) {
+        throw new KeyStoreError(
+          403,
+          "Your key is switched off. Ask the engineering team.",
+        );
+      }
+      const minted = deps.setupCodes.mint(entry.name);
+      res.status(201).json({ code: minted.code, expires_at: minted.expiresAt });
     }),
   );
 

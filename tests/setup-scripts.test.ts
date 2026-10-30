@@ -10,7 +10,7 @@ import { AddressInfo } from "node:net";
 import { Config } from "../src/config";
 import { createServer } from "../src/server";
 import { buildRegistry } from "../src/providers/registry";
-import { KEYS, startMockRelay } from "./helpers/mock-relay";
+import { KEYS, SETUP_CODE, startMockRelay } from "./helpers/mock-relay";
 
 const SETUP_DIR = path.resolve(__dirname, "..", "setup");
 const IS_WINDOWS = process.platform === "win32";
@@ -150,6 +150,26 @@ function run(
   };
   if (key !== undefined) env.RELAY_API_KEY = key;
   else delete env.RELAY_API_KEY;
+  return exec(cmd, argv, env);
+}
+
+function runWithCode(
+  r: Runner,
+  sb: Sandbox,
+  relayUrl: string,
+  code: string,
+  args: string[] = [],
+) {
+  const { cmd, args: argv } = r.command(args);
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    XDG_CONFIG_HOME: sb.config,
+    XDG_DATA_HOME: sb.data,
+    RELAY_URL: relayUrl,
+    RELAY_RELEASE_DATE: TEST_DATE,
+    RELAY_SETUP_CODE: code,
+  };
+  delete env.RELAY_API_KEY;
   return exec(cmd, argv, env);
 }
 
@@ -569,6 +589,70 @@ for (const r of runners) {
     assert.equal((await run(r, sb, relay.url, KEYS.luna)).code, 0);
     assert.equal(readJson(sb.configFile).model, "dozaldevs-relay/gpt-6-luna");
     assert.equal(fs.readFileSync(sb.keyFile, "utf-8"), KEYS.luna);
+  });
+
+  test(`${r.name}: a setup code sets everything up without any key being typed, and never prints the key`, async (t) => {
+    const relay = await startMockRelay();
+    const sb = sandbox();
+    t.after(() => relay.close());
+    const res = await runWithCode(r, sb, relay.url, ` ${SETUP_CODE}\r\n`);
+    assert.equal(res.code, 0, res.out);
+    assert.match(res.out, /All set/);
+    assert.equal(
+      res.out.includes(KEYS.luna),
+      false,
+      "the key is never printed",
+    );
+    assert.equal(fs.readFileSync(sb.keyFile, "utf-8"), KEYS.luna);
+    assert.ok(
+      relay.calls.some(
+        (c) => c.method === "POST" && c.path === "/setup/redeem",
+      ),
+    );
+    const cfg = readJson(sb.configFile);
+    assert.equal(
+      JSON.stringify(cfg).includes(KEYS.luna),
+      false,
+      "the key is not in the settings file",
+    );
+    assert.ok(cfg.provider["dozaldevs-relay"]);
+  });
+
+  test(`${r.name}: a code the relay refuses stops with a clear message and writes nothing`, async (t) => {
+    const relay = await startMockRelay();
+    const sb = sandbox();
+    t.after(() => relay.close());
+    const res = await runWithCode(
+      r,
+      sb,
+      relay.url,
+      "used-or-expired-code-0123456789abcdef",
+    );
+    assert.notEqual(res.code, 0);
+    assert.match(
+      res.out,
+      /your setup code did not work \(this setup code is not valid/,
+    );
+    assert.match(res.out, /Get a new command from your page/);
+    assert.deepEqual(files(sb), []);
+  });
+
+  test(`${r.name}: a setup code is never redeemed by --check`, async (t) => {
+    const relay = await startMockRelay();
+    const sb = sandbox();
+    t.after(() => relay.close());
+    const first = await run(r, sb, relay.url, KEYS.wide);
+    assert.equal(first.code, 0, first.out);
+    assert.equal(fs.readFileSync(sb.keyFile, "utf-8"), KEYS.wide);
+    const again = await runWithCode(r, sb, relay.url, SETUP_CODE, [
+      r.checkFlag,
+    ]);
+    assert.equal(again.code, 0, again.out);
+    assert.equal(
+      relay.calls.some((c) => c.path === "/setup/redeem"),
+      false,
+      "--check never redeems a code",
+    );
   });
 
   test(`${r.name}: a key pasted with spaces and line breaks still works`, async (t) => {

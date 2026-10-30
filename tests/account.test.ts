@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import http from "node:http";
+import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { AddressInfo } from "node:net";
@@ -219,7 +220,7 @@ async function startApp(
     assert.equal(r.status, 201, r.text);
     return cookieOf(r);
   };
-  return { call, clock, configPath, invite, tokenOf, join, cookieOf };
+  return { call, clock, configPath, invite, tokenOf, join, cookieOf, base };
 }
 
 test("an admin invites someone, the link works once, and the config never holds the link or the password", async (t) => {
@@ -717,3 +718,193 @@ test("config checks: a sign-in for a deleted key is dropped with a warning, and 
   );
   bad({ "public-url": "relay.example.com" }, /public-url/);
 });
+
+test("a setup code lets the setup script fetch the person's own key once, and nothing else", async (t) => {
+  const { call, join } = await startApp(t);
+  const maria = await join("maria", "maria@example.com");
+  const omar = await join("omar", "omar@example.com");
+
+  assert.equal(
+    (await call("POST", "/account/api/setup-code", {})).status,
+    401,
+    "needs a teammate sign-in",
+  );
+  assert.equal(
+    (await call("POST", "/account/api/setup-code", { key: ADMIN })).status,
+    401,
+    "an admin key is not a sign-in",
+  );
+  assert.equal(
+    (
+      await call("POST", "/account/api/setup-code", {
+        cookie: maria,
+        csrf: false,
+      })
+    ).status,
+    403,
+  );
+
+  const minted = await call("POST", "/account/api/setup-code", {
+    cookie: maria,
+  });
+  assert.equal(minted.status, 201);
+  assert.match(minted.body.code, /^[A-Za-z0-9_-]{30,}$/);
+  assert.equal(
+    minted.text.includes(MARIA),
+    false,
+    "the page never gets the key itself",
+  );
+
+  const got = await call("POST", "/setup/redeem", {
+    body: { code: minted.body.code },
+  });
+  assert.equal(got.status, 200);
+  assert.equal(got.body.key, MARIA);
+  assert.equal(
+    (await call("POST", "/setup/redeem", { body: { code: minted.body.code } }))
+      .status,
+    400,
+    "a code works once",
+  );
+
+  const theirs = await call("POST", "/account/api/setup-code", {
+    cookie: omar,
+  });
+  assert.equal(
+    (await call("POST", "/setup/redeem", { body: { code: theirs.body.code } }))
+      .body.key,
+    OMAR,
+  );
+});
+
+test("a setup code expires after fifteen minutes, and only a few can be live at once", async (t) => {
+  const { call, join, clock } = await startApp(t);
+  const maria = await join("maria", "maria@example.com");
+  const old = await call("POST", "/account/api/setup-code", { cookie: maria });
+  clock.t = START + 15 * 60_000 + 1;
+  assert.equal(
+    (await call("POST", "/setup/redeem", { body: { code: old.body.code } }))
+      .status,
+    400,
+  );
+
+  clock.t = START;
+  const codes: string[] = [];
+  for (let i = 0; i < 6; i++) {
+    codes.push(
+      (await call("POST", "/account/api/setup-code", { cookie: maria })).body
+        .code,
+    );
+    clock.t += 1000;
+  }
+  assert.equal(
+    (await call("POST", "/setup/redeem", { body: { code: codes[0] } })).status,
+    400,
+    "the oldest of six is gone",
+  );
+  assert.equal(
+    (await call("POST", "/setup/redeem", { body: { code: codes[5] } })).status,
+    200,
+  );
+});
+
+test("guessing setup codes is limited, and a switched-off key gets none", async (t) => {
+  const { call, join } = await startApp(t);
+  const maria = await join("maria", "maria@example.com");
+  const good = await call("POST", "/account/api/setup-code", { cookie: maria });
+  for (let i = 0; i < 10; i++) {
+    const r = await call("POST", "/setup/redeem", {
+      body: { code: "x".repeat(30) + i },
+    });
+    assert.equal(r.status, 400);
+  }
+  const locked = await call("POST", "/setup/redeem", {
+    body: { code: good.body.code },
+  });
+  assert.equal(
+    locked.status,
+    429,
+    "even the right code is refused once the address is locked out",
+  );
+
+  const other = await startApp(t);
+  const cookie = await other.join("maria", "maria@example.com");
+  const code = await other.call("POST", "/account/api/setup-code", { cookie });
+  await other.call("PATCH", "/admin/keys/maria", {
+    key: ADMIN,
+    body: { disabled: true },
+  });
+  assert.equal(
+    (
+      await other.call("POST", "/setup/redeem", {
+        body: { code: code.body.code },
+      })
+    ).status,
+    400,
+    "a disabled key's code is refused",
+  );
+  assert.equal(
+    (await other.call("POST", "/account/api/setup-code", { cookie })).status,
+    403,
+  );
+  assert.equal(
+    (await other.call("POST", "/setup/redeem", { body: {} })).status,
+    400,
+  );
+});
+
+test(
+  "the real setup script, served by the relay, sets a teammate up from a code with no key typed anywhere",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const { call, join, base } = await startApp(t);
+    const maria = await join("maria", "maria@example.com");
+    const minted = await call("POST", "/account/api/setup-code", {
+      cookie: maria,
+    });
+    const served = await (await fetch(`${base}/setup/opencode.sh`)).text();
+
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "account-setup-"));
+    t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      XDG_CONFIG_HOME: path.join(home, "config"),
+      XDG_DATA_HOME: path.join(home, "data"),
+      RELAY_SETUP_CODE: minted.body.code,
+    };
+    delete env.RELAY_API_KEY;
+    delete env.RELAY_URL;
+    const out = await new Promise<{ code: number | null; text: string }>(
+      (resolve) => {
+        const child = spawn("/bin/bash", [], {
+          env,
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+        let text = "";
+        child.stdout.on("data", (c) => (text += c));
+        child.stderr.on("data", (c) => (text += c));
+        child.on("close", (code) => resolve({ code, text }));
+        child.stdin.end(served);
+      },
+    );
+    assert.equal(out.code, 0, out.text);
+    assert.match(out.text, /All set/);
+    assert.equal(out.text.includes(MARIA), false, "the key is never printed");
+    assert.equal(
+      fs.readFileSync(
+        path.join(home, "data", "opencode", "dozaldevs-relay.key"),
+        "utf8",
+      ),
+      MARIA,
+    );
+    assert.equal(
+      (
+        await call("POST", "/setup/redeem", {
+          body: { code: minted.body.code },
+        })
+      ).status,
+      400,
+      "and the code is spent",
+    );
+  },
+);

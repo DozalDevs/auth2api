@@ -12,6 +12,8 @@ const LUNA = ["gpt-6-luna", "gpt-5.6-luna"];
 const WIDE = [...LUNA, "gpt-6-sol", "gpt-5.6-sol", "gpt-6-astra"];
 const NOT_SERVED = ["gpt-6.1-sol", "gpt-6.1-terra"];
 
+export const SETUP_CODE = "good-setup-code-0123456789abcdefghij";
+
 export const CATALOG: {
   id: string;
   name: string;
@@ -59,6 +61,19 @@ export async function startMockRelay(
         model: body.model,
       });
       if (req.url === "/health") return json(200, { status: "ok" });
+      if (req.url === "/setup/redeem" && req.method === "POST") {
+        if (key)
+          return json(400, {
+            error: { message: "no key is sent with a setup code" },
+          });
+        if (body.code === SETUP_CODE) return json(200, { key: KEYS.luna });
+        return json(400, {
+          error: {
+            message:
+              "this setup code is not valid, or it was already used or expired.",
+          },
+        });
+      }
       if (!key) return json(401, { error: { message: "Missing API key" } });
       const known = Object.values(KEYS).includes(key as any);
       if (!known) return json(403, { error: { message: "Invalid API key" } });

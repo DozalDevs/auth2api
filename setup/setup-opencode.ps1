@@ -41,11 +41,11 @@ function Die([string]$Text) {
     throw "`nSetup stopped: $Text`nNothing was changed."
 }
 
-function Invoke-Relay([string]$Method, [string]$Path, [string]$Json) {
+function Invoke-Relay([string]$Method, [string]$Path, [string]$Json, [bool]$Anonymous = $false) {
     $req = [System.Net.HttpWebRequest]::Create($RelayUrl + $Path)
     $req.Method = $Method
     $req.UserAgent = 'dozaldevs-opencode-setup'
-    $req.Headers.Add('Authorization', "Bearer $script:Key")
+    if (-not $Anonymous) { $req.Headers.Add('Authorization', "Bearer $script:Key") }
     $req.Timeout = if ($Json) { 90000 } else { 30000 }
     if ($Json) {
         $bytes = [Text.Encoding]::UTF8.GetBytes($Json)
@@ -157,6 +157,14 @@ function Main {
         $script:Key = [System.IO.File]::ReadAllText($KeyFile)
     }
     elseif ($env:RELAY_API_KEY) { $script:Key = $env:RELAY_API_KEY }
+    elseif ($env:RELAY_SETUP_CODE) {
+        Say 'Using your setup code...'
+        $codeText = $env:RELAY_SETUP_CODE -replace '[^A-Za-z0-9_-]', ''
+        $r = Invoke-Relay 'POST' '/setup/redeem' ('{"code":"' + $codeText + '"}') $true
+        if ($r.Status -eq 0) { Die "could not reach $RelayUrl. Check your internet connection and try again." }
+        if ($r.Status -ne 200) { Die "your setup code did not work ($(Get-RelayMessage $r.Body)). Get a new command from your page and run it again." }
+        if ($r.Body -match '"key"\s*:\s*"([^"]+)"') { $script:Key = $Matches[1] }
+    }
     else {
         try { $secure = Read-Host 'Paste your relay API key (nothing shows as you type), then press Enter' -AsSecureString }
         catch { Die 'no way to ask for your key here. Run this in a PowerShell window, or set RELAY_API_KEY.' }

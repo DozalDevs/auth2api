@@ -4,11 +4,7 @@ export const ACCOUNT_JS = String.raw`
 (function () {
   'use strict';
   var LENGTHS = [60, 120, 240, 480, 1440];
-  var state = { me: null, loaded: false, loadError: null, lastLoad: 0, asking: false, preset: null, usageOpen: false, setupOpenSeen: false };
-  var SETUP = {
-    mac: 'curl -fsSL ' + location.origin + '/setup/opencode.sh | bash',
-    win: '[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; & ([scriptblock]::Create((irm ' + location.origin + '/setup/opencode.ps1)))'
-  };
+  var state = { me: null, loaded: false, loadError: null, lastLoad: 0, asking: false, preset: null, usageOpen: false, setup: null };
 
   ${SHARED_JS}
 
@@ -197,12 +193,30 @@ export const ACCOUNT_JS = String.raw`
     var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
     say('Press Ctrl+C or Cmd+C to copy.', 'ok');
   }
+  function setupCommands(code) {
+    return {
+      mac: 'curl -fsSL ' + location.origin + '/setup/opencode.sh | RELAY_SETUP_CODE=' + code + ' bash',
+      win: "$env:RELAY_SETUP_CODE='" + code + "'; [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; & ([scriptblock]::Create((irm " + location.origin + '/setup/opencode.ps1)))'
+    };
+  }
+  function getSetupCode(btn) {
+    btn.disabled = true;
+    api('POST', '/account/api/setup-code')
+      .then(function (res) { state.setup = res; renderSetup(); })
+      .catch(function (err) { fail(err); btn.disabled = false; });
+  }
   function renderSetup() {
     var body = $('setup-body');
     clear(body);
-    body.appendChild(h('p', { class: 'muted intro', text: 'Install OpenCode from opencode.ai/download, open a terminal, and paste the line for your computer. It asks for your key (it ends in ' + state.me.key.suffix + '). Paste the key you were sent.' }));
-    body.appendChild(copyBox('Mac or Linux', SETUP.mac));
-    body.appendChild(copyBox('Windows', SETUP.win));
+    body.appendChild(h('p', { class: 'muted intro', text: 'First install OpenCode from opencode.ai/download. Then get your command, open a terminal and paste it. It sets everything up, so you never have to type or copy your key.' }));
+    var get = h('button', { type: 'button', id: 'setup-get', class: state.setup ? 'quiet' : 'primary', text: state.setup ? 'Get a new command' : 'Get my setup command' });
+    get.addEventListener('click', function () { getSetupCode(get); });
+    body.appendChild(h('div', { class: 'copybox' }, [get]));
+    if (!state.setup) return;
+    var cmds = setupCommands(state.setup.code);
+    body.appendChild(copyBox('Mac or Linux', cmds.mac));
+    body.appendChild(copyBox('Windows (PowerShell)', cmds.win));
+    body.appendChild(h('p', { class: 'hint intro', id: 'setup-note', text: 'It works once and only until ' + new Date(state.setup.expires_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) + '. Keep it to yourself like a password.' }));
   }
 
   // ---- Everything ----
