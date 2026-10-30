@@ -142,6 +142,39 @@ export interface DashboardUser {
   "password-hash": string;
 }
 
+/**
+ * A teammate who signs in to the account page. One person per key, so
+ * everything the page shows or does is scoped to that key and never takes a
+ * key name from the browser.
+ */
+export interface Member {
+  email: string;
+  key: string;
+  "password-hash": string;
+}
+
+/** A one-time link that lets someone set a password for a key. Only the hash of the token is kept. */
+export interface Invite {
+  "token-hash": string;
+  key: string;
+  email: string;
+  "created-at": string;
+  "expires-at": string;
+  "created-by": string;
+}
+
+export interface SlackConfig {
+  "bot-token": string;
+  /** Channel id, for example C0BBNMMCS49. */
+  channel: string;
+  /** Default https://slack.com/api. Tests point it at a stand-in. */
+  "api-base"?: string;
+}
+
+export interface NotificationsConfig {
+  slack?: SlackConfig;
+}
+
 export interface Config {
   host: string;
   port: number;
@@ -151,6 +184,11 @@ export interface Config {
   models?: CatalogModel[];
   "opencode-go"?: OpenCodeGoConfig;
   "access-requests"?: AccessRequest[];
+  members?: Member[];
+  invites?: Invite[];
+  notifications?: NotificationsConfig;
+  /** The address people use to reach this relay, for links in messages. No trailing slash. */
+  "public-url"?: string;
   "body-limit": string;
   cloaking: CloakingConfig;
   timeouts: TimeoutConfig;
@@ -458,6 +496,130 @@ export function validateApiKeys(list: unknown): ApiKeyEntry[] {
   return entries;
 }
 
+export const EMAIL_RE = /^[^\s@<>"]{1,64}@[^\s@<>"]{1,255}\.[^\s@<>"]{2,}$/;
+const TOKEN_HASH_RE = /^[a-f0-9]{64}$/;
+
+export function validateMembers(list: unknown): Member[] {
+  if (list === undefined || list === null) return [];
+  if (!Array.isArray(list)) throw new Error("members must be a list");
+  const seenEmail = new Set<string>();
+  const seenKey = new Set<string>();
+  return list.map((m, i) => {
+    const o = (m ?? {}) as Record<string, unknown>;
+    const where = `members[${i}]`;
+    if (typeof o.email !== "string" || !EMAIL_RE.test(o.email)) {
+      throw new Error(`${where}: email must be an email address`);
+    }
+    if (typeof o.key !== "string" || !KEY_NAME_RE.test(o.key)) {
+      throw new Error(`${where}: key must be a key name`);
+    }
+    if (
+      typeof o["password-hash"] !== "string" ||
+      !PASSWORD_HASH_RE.test(o["password-hash"])
+    ) {
+      throw new Error(`${where}: password-hash must be a scrypt hash`);
+    }
+    const email = o.email.toLowerCase();
+    if (seenEmail.has(email))
+      throw new Error(`members: duplicate email "${email}"`);
+    if (seenKey.has(o.key.toLowerCase())) {
+      throw new Error(`members: more than one sign-in for key "${o.key}"`);
+    }
+    seenEmail.add(email);
+    seenKey.add(o.key.toLowerCase());
+    return { email, key: o.key, "password-hash": o["password-hash"] };
+  });
+}
+
+export function validateInvites(list: unknown): Invite[] {
+  if (list === undefined || list === null) return [];
+  if (!Array.isArray(list)) throw new Error("invites must be a list");
+  return list.map((v, i) => {
+    const o = (v ?? {}) as Record<string, unknown>;
+    const where = `invites[${i}]`;
+    if (
+      typeof o["token-hash"] !== "string" ||
+      !TOKEN_HASH_RE.test(o["token-hash"])
+    ) {
+      throw new Error(`${where}: token-hash must be a sha256 hex string`);
+    }
+    if (typeof o.key !== "string" || !KEY_NAME_RE.test(o.key)) {
+      throw new Error(`${where}: key must be a key name`);
+    }
+    if (typeof o.email !== "string" || !EMAIL_RE.test(o.email)) {
+      throw new Error(`${where}: email must be an email address`);
+    }
+    for (const f of ["created-at", "expires-at"]) {
+      const t = o[f];
+      if (typeof t !== "string" || Number.isNaN(Date.parse(t))) {
+        throw new Error(`${where}: ${f} must be a timestamp`);
+      }
+    }
+    return {
+      "token-hash": o["token-hash"],
+      key: o.key,
+      email: o.email.toLowerCase(),
+      "created-at": o["created-at"] as string,
+      "expires-at": o["expires-at"] as string,
+      "created-by":
+        typeof o["created-by"] === "string" ? o["created-by"] : "an admin",
+    };
+  });
+}
+
+export function validateNotifications(
+  value: unknown,
+): NotificationsConfig | undefined {
+  if (value === undefined || value === null) return undefined;
+  const o = value as Record<string, any>;
+  if (typeof o !== "object" || Array.isArray(o)) {
+    throw new Error("notifications must be a mapping");
+  }
+  const out: NotificationsConfig = {};
+  if (o.slack !== undefined && o.slack !== null) {
+    const sl = o.slack as Record<string, unknown>;
+    if (typeof sl["bot-token"] !== "string" || !sl["bot-token"].trim()) {
+      throw new Error(
+        "notifications.slack.bot-token must be a non-empty string",
+      );
+    }
+    if (
+      typeof sl.channel !== "string" ||
+      !/^[A-Z0-9]{6,20}$/.test(sl.channel)
+    ) {
+      throw new Error(
+        "notifications.slack.channel must be a Slack channel id (like C0BBNMMCS49)",
+      );
+    }
+    const slack: SlackConfig = {
+      "bot-token": sl["bot-token"].trim(),
+      channel: sl.channel,
+    };
+    if (sl["api-base"] !== undefined) {
+      if (
+        typeof sl["api-base"] !== "string" ||
+        !/^https?:\/\//.test(sl["api-base"])
+      ) {
+        throw new Error("notifications.slack.api-base must be an http(s) URL");
+      }
+      slack["api-base"] = sl["api-base"].replace(/\/+$/, "");
+    }
+    out.slack = slack;
+  }
+  return out;
+}
+
+export function validatePublicUrl(value: unknown): string | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (
+    typeof value !== "string" ||
+    !/^https?:\/\/[^\s/]+$/.test(value.replace(/\/+$/, ""))
+  ) {
+    throw new Error("public-url must look like https://relay.example.com");
+  }
+  return value.replace(/\/+$/, "");
+}
+
 export function validateDashboardUsers(list: unknown): DashboardUser[] {
   if (list === undefined || list === null) return [];
   if (!Array.isArray(list)) throw new Error("dashboard-users must be a list");
@@ -520,6 +682,25 @@ export function loadConfig(configPath?: string): Config {
   raw.models = validateCatalog(raw.models);
   raw["opencode-go"] = validateOpenCodeGo(raw["opencode-go"]);
   raw["access-requests"] = validateAccessRequests(raw["access-requests"]);
+  raw.members = validateMembers(raw.members);
+  raw.invites = validateInvites(raw.invites);
+  raw.notifications = validateNotifications(raw.notifications);
+  raw["public-url"] = validatePublicUrl(raw["public-url"]);
+  const keyNames = new Set(raw["api-keys"].map((k) => k.name.toLowerCase()));
+  const keep = <T extends { key: string; email: string }>(
+    items: T[],
+    what: string,
+  ) =>
+    items.filter((x) => {
+      const ok = keyNames.has(x.key.toLowerCase());
+      if (!ok)
+        console.warn(
+          `[config] ignoring ${what} for ${x.email}: key "${x.key}" no longer exists`,
+        );
+      return ok;
+    });
+  raw.members = keep(raw.members, "sign-in");
+  raw.invites = keep(raw.invites, "invite");
   if (
     !raw.stats.enabled &&
     raw["api-keys"].some((k) => k["daily-token-limit"] !== undefined)
@@ -561,6 +742,14 @@ export function persistAccessRequests(
   filePath: string,
 ): (requests: AccessRequest[]) => void {
   return persistSection(filePath, "access-requests");
+}
+
+export function persistMembers(filePath: string): (members: Member[]) => void {
+  return persistSection(filePath, "members");
+}
+
+export function persistInvites(filePath: string): (invites: Invite[]) => void {
+  return persistSection(filePath, "invites");
 }
 
 export function persistCatalog(

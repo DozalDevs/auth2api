@@ -347,7 +347,7 @@ test("granting over HTTP: the model is refused, then allowed, then refused again
   assert.equal(before.body.error.type, "model_not_allowed");
   assert.match(
     before.body.error.message,
-    /not enabled for this key\. Ask the engineering team for access/,
+    /is not on your key\. Ask for it at http:\/\/127\.0\.0\.1:\d+\/account\?ask=gpt-6-astra, or ask the engineering team/,
   );
   assert.equal(before.body.error.code, undefined);
 

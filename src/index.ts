@@ -7,6 +7,8 @@ import {
   persistAccessRequests,
   persistApiKeys,
   persistCatalog,
+  persistInvites,
+  persistMembers,
   resolveAuthDir,
 } from "./config";
 import { ProviderId } from "./auth/types";
@@ -187,6 +189,8 @@ async function startServer(): Promise<void> {
     persistKeys: persistApiKeys(configPath || "config.yaml"),
     persistCatalog: persistCatalog(configPath || "config.yaml"),
     persistRequests: persistAccessRequests(configPath || "config.yaml"),
+    persistMembers: persistMembers(configPath || "config.yaml"),
+    persistInvites: persistInvites(configPath || "config.yaml"),
   });
   const host = config.host || "127.0.0.1";
   const port = config.port;

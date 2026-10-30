@@ -274,7 +274,7 @@ export class AccessRequestStore {
   }
 }
 
-function describe(r: AccessRequest, at: number) {
+export function describeRequest(r: AccessRequest, at: number) {
   return {
     id: r.id,
     key: r.key,
@@ -321,6 +321,7 @@ export function registerRequestRoutes(
   requests: AccessRequestStore,
   keys: KeyStore,
   guard: express.RequestHandler[],
+  onCreated?: (created: AccessRequest) => void,
 ): void {
   const me = (res: express.Response) => res.locals.keyEntry as ApiKeyEntry;
 
@@ -340,7 +341,8 @@ export function registerRequestRoutes(
         reason: b.reason,
         minutes,
       });
-      res.status(201).json(describe(created, keys.now()));
+      onCreated?.(created);
+      res.status(201).json(describeRequest(created, keys.now()));
     }),
   );
 
@@ -351,7 +353,7 @@ export function registerRequestRoutes(
       res.json({
         requests: requests
           .list({ key: me(res).name })
-          .map((r) => describe(r, keys.now())),
+          .map((r) => describeRequest(r, keys.now())),
       });
     }),
   );
@@ -361,7 +363,10 @@ export function registerRequestRoutes(
     ...guard,
     handle((req, res) => {
       res.json(
-        describe(requests.cancel(req.params.id, me(res).name), keys.now()),
+        describeRequest(
+          requests.cancel(req.params.id, me(res).name),
+          keys.now(),
+        ),
       );
     }),
   );
@@ -383,7 +388,9 @@ export function registerRequestAdminRoutes(
         typeof req.query.status === "string" ? req.query.status : "pending";
       res.json({
         pending: requests.pendingCount(),
-        requests: requests.list({ status }).map((r) => describe(r, keys.now())),
+        requests: requests
+          .list({ status })
+          .map((r) => describeRequest(r, keys.now())),
       });
     }),
   );
@@ -399,7 +406,7 @@ export function registerRequestAdminRoutes(
             ? Math.round(b.hours * 60)
             : undefined;
       res.json(
-        describe(
+        describeRequest(
           requests.approve(req.params.id, who(res), { minutes, note: b.note }),
           keys.now(),
         ),
@@ -411,7 +418,7 @@ export function registerRequestAdminRoutes(
     "/admin/access-requests/:id/reject",
     handle((req, res) => {
       res.json(
-        describe(
+        describeRequest(
           requests.reject(req.params.id, who(res), { note: req.body?.note }),
           keys.now(),
         ),

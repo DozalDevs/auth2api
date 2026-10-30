@@ -1,3 +1,5 @@
+import { SHARED_JS } from "./shared";
+
 export const JS = String.raw`
 (function () {
   'use strict';
@@ -8,58 +10,11 @@ export const JS = String.raw`
     loaded: false, loadError: null, lastLoad: 0,
     keys: [], usage: null, statsOff: false, models: [], go: null, requests: [],
     tab: null, days: 1,
-    adding: false, editing: null, granting: null, addingModel: false,
+    adding: false, editing: null, granting: null, inviting: null, addingModel: false,
     keyFilter: '', modelFilter: '', decidedOpen: false, newModelAccess: 'on_request'
   };
 
-  function $(id) { return document.getElementById(id); }
-  function h(tag, props, kids) {
-    var node = document.createElement(tag);
-    if (props) Object.keys(props).forEach(function (k) {
-      if (k === 'text') node.textContent = props[k];
-      else if (k === 'class') node.className = props[k];
-      else if (k.slice(0, 2) === 'on') node.addEventListener(k.slice(2), props[k]);
-      else if (props[k] !== false && props[k] !== null && props[k] !== undefined) node.setAttribute(k, props[k] === true ? '' : props[k]);
-    });
-    (kids || []).forEach(function (kid) { if (kid) node.appendChild(typeof kid === 'string' ? document.createTextNode(kid) : kid); });
-    return node;
-  }
-  function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
-
-  // ---- Wording and numbers ----
-  function full(n) { return Number(n).toLocaleString('en-US'); }
-  function short(n) {
-    n = Number(n);
-    if (n >= 1e9) return (n / 1e9).toFixed(1).replace(/\.0$/, '') + 'B';
-    if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
-    if (n >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'K';
-    return String(n);
-  }
-  function plural(n, one, many) { return n + ' ' + (n === 1 ? one : (many || one + 's')); }
-  function left(sec) {
-    if (sec <= 0) return 'ended';
-    var m = Math.floor(sec / 60);
-    if (m < 1) return 'under 1 min left';
-    if (m < 60) return m + ' min left';
-    var hr = Math.floor(m / 60), rest = m % 60;
-    if (hr < 48) return hr + 'h' + (rest ? ' ' + rest + 'm' : '') + ' left';
-    return Math.floor(hr / 24) + ' days left';
-  }
-  function ago(iso) {
-    var sec = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
-    if (sec < 60) return 'just now';
-    var m = Math.round(sec / 60);
-    if (m < 60) return m + ' min ago';
-    var hr = Math.round(m / 60);
-    if (hr < 48) return hr + ' h ago';
-    return Math.round(hr / 24) + ' days ago';
-  }
-  function when(iso) { return new Date(iso).toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); }
-  function minutesText(m) {
-    if (m % 1440 === 0) return plural(m / 1440, 'day');
-    if (m % 60 === 0) return plural(m / 60, 'hour');
-    return plural(m, 'minute');
-  }
+  ${SHARED_JS}
   function nameOf(id) {
     for (var i = 0; i < state.models.length; i++) if (state.models[i].id.toLowerCase() === String(id).toLowerCase()) return state.models[i].name;
     return id;
@@ -69,25 +24,7 @@ export const JS = String.raw`
     var n = ids.map(nameOf);
     return n.length <= 1 ? n.join('') : n.slice(0, -1).join(', ') + ' and ' + n[n.length - 1];
   }
-  function stateBox(title, body, action, kind) {
-    var box = h('div', { class: 'state' + (kind ? ' ' + kind : '') }, [h('h2', { text: title }), body ? h('p', { text: body }) : null]);
-    if (action) box.appendChild(action);
-    return box;
-  }
-
   // ---- Feedback ----
-  var toastTimer = null;
-  function say(msg, kind) {
-    var el = $('toast');
-    clearTimeout(toastTimer);
-    clear(el);
-    if (!msg) { el.hidden = true; return; }
-    el.className = 'toast' + (kind === 'error' ? ' error' : '');
-    el.appendChild(h('span', { text: msg }));
-    if (kind === 'error') el.appendChild(h('button', { type: 'button', text: 'Dismiss', onclick: function () { say(''); } }));
-    el.hidden = false;
-    if (kind !== 'error') toastTimer = setTimeout(function () { say(''); }, 5000);
-  }
   var confirmResolve = null;
   function finishConfirm(value) {
     var done = confirmResolve;
@@ -111,23 +48,6 @@ export const JS = String.raw`
   $('confirm-no').addEventListener('click', function () { finishConfirm(false); });
   $('confirm').addEventListener('close', function () { finishConfirm(false); });
 
-  function api(method, path, body) {
-    var opts = { method: method, headers: { 'X-Relay-Csrf': '1' } };
-    if (body !== undefined) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
-    return fetch(path, opts).then(function (res) {
-      if (res.status === 204) return null;
-      return res.text().then(function (text) {
-        var data = null;
-        try { data = text ? JSON.parse(text) : null; } catch (e) { data = null; }
-        if (!res.ok) {
-          var err = new Error((data && data.error && data.error.message) || ('Request failed (' + res.status + ')'));
-          err.status = res.status;
-          throw err;
-        }
-        return data;
-      });
-    });
-  }
   function showLogin(message) {
     $('app').hidden = true;
     $('login').hidden = false;
@@ -466,7 +386,8 @@ export const JS = String.raw`
     var chips = [];
     if (k.admin) chips.push(h('span', { class: 'chip', text: 'Admin' }));
     if (k.disabled) chips.push(h('span', { class: 'chip off', text: 'Disabled' }));
-    var name = h('div', { class: 'k-name', title: 'Key ends in ' + k.key_suffix }, [h('strong', { text: k.name }), chips.length ? h('div', { class: 'chips' }, chips) : null]);
+    if (k.invite && !k.login) chips.push(h('span', { class: 'chip', title: 'Link sent to ' + k.invite.email, text: 'Invite pending' }));
+    var name = h('div', { class: 'k-name', title: 'Key ends in ' + k.key_suffix }, [h('strong', { text: k.name }), k.login ? h('div', { class: 'muted small', title: 'Signs in to the account page with this email', text: k.login }) : null, chips.length ? h('div', { class: 'chips' }, chips) : null]);
     var access = h('div', { class: 'k-access' }, [h('div', { class: 'sum', title: acc.title, text: acc.text }), loansFor(k)]);
     var primary = h('div', { class: 'k-primary' }, [any
       ? h('button', { type: 'button', text: 'Edit', 'aria-label': 'Edit ' + k.name, onclick: function () { openForm(k); } })
@@ -474,6 +395,8 @@ export const JS = String.raw`
     var items = [];
     if (!any) items.push({ text: 'Edit access and limit', run: function () { openForm(k); } });
     items.push({ text: k.disabled ? 'Enable key' : 'Disable key', run: function () { toggleKey(k); } });
+    items.push({ text: k.login || k.invite ? 'Send a new sign-in link' : 'Invite to sign in', run: function () { openInvite(k); } });
+    if (k.login) items.push({ text: 'Remove sign-in', run: function () { removeLogin(k); } });
     items.push('sep');
     items.push({ text: 'Delete key', bad: true, run: function () { removeKey(k); } });
     var menu = rowMenu('More actions for ' + k.name, items);
@@ -484,14 +407,15 @@ export const JS = String.raw`
     for (var i = 0; i < rows.length; i++) if (rows[i].getAttribute('data-key') === name) return rows[i];
     return null;
   }
-  function parkForms() { $('form-holder').appendChild($('key-form')); $('form-holder').appendChild($('grant-form')); }
+  function parkForms() { $('form-holder').appendChild($('key-form')); $('form-holder').appendChild($('grant-form')); $('form-holder').appendChild($('invite-form')); }
   function placeForms() {
     var list = $('keys');
     if (state.adding) { list.insertBefore($('key-form'), list.firstChild); return; }
     var row;
     if (state.editing && (row = findRow(state.editing))) { row.parentNode.insertBefore($('key-form'), row.nextSibling); return; }
     if (state.granting && (row = findRow(state.granting))) { row.parentNode.insertBefore($('grant-form'), row.nextSibling); return; }
-    state.editing = null; state.granting = null;
+    if (state.inviting && (row = findRow(state.inviting))) { row.parentNode.insertBefore($('invite-form'), row.nextSibling); return; }
+    state.editing = null; state.granting = null; state.inviting = null;
   }
   function renderKeysBar() {
     var many = state.keys.length > SEARCH_AFTER;
@@ -500,7 +424,7 @@ export const JS = String.raw`
     keyCount.textContent = plural(state.keys.length, 'key');
     keysLeft.className = 'bar-left' + (many ? '' : ' counting');
     $('keys-bar').hidden = !state.keys.length && !state.adding;
-    addKeyBtn.hidden = state.adding || !!state.editing || !!state.granting || !state.keys.length;
+    addKeyBtn.hidden = state.adding || !!state.editing || !!state.granting || !!state.inviting || !state.keys.length;
     $('f-cap-wrap').hidden = state.statsOff;
   }
   function renderKeys() {
@@ -527,8 +451,61 @@ export const JS = String.raw`
     placeForms();
   }
 
+  function openInvite(k) {
+    if (state.adding || state.editing) closeForm();
+    closeGrant(true);
+    state.inviting = k.name;
+    $('invite-title').textContent = (k.login ? 'New sign-in link for ' : 'Invite ') + k.name + (k.login ? '' : ' to sign in');
+    $('i-email').value = k.login || (k.invite ? k.invite.email : '');
+    $('secret-panel').hidden = true;
+    $('link-panel').hidden = true;
+    renderKeys();
+    $('i-email').focus();
+    $('invite-form').scrollIntoView({ block: 'nearest' });
+  }
+  function closeInvite() { state.inviting = null; renderKeys(); }
+  function submitInvite(ev) {
+    ev.preventDefault();
+    var name = state.inviting;
+    if (!name) return;
+    var btn = $('i-save');
+    btn.disabled = true;
+    api('POST', '/admin/keys/' + encodeURIComponent(name) + '/invite', { email: $('i-email').value.trim() })
+      .then(function (res) {
+        state.inviting = null;
+        $('link-name').textContent = res.key;
+        $('link-note').textContent = 'Send this to ' + res.email + '. It works once and expires ' + when(res.expires_at) + '.';
+        $('link-value').textContent = res.link;
+        $('link-copy').textContent = 'Copy link';
+        $('link-panel').hidden = false;
+        say('Link ready for ' + res.email + '.', 'ok');
+        return load().then(function () { $('link-panel').scrollIntoView({ block: 'nearest' }); });
+      }).catch(fail).then(function () { btn.disabled = false; });
+  }
+  function copyLink() {
+    var text = $('link-value').textContent;
+    var done = function () { $('link-copy').textContent = 'Copied'; };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, function () { selectNode($('link-value')); });
+    else selectNode($('link-value'));
+  }
+  function selectNode(node) {
+    var range = document.createRange();
+    range.selectNodeContents(node);
+    var sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    say('Press Ctrl+C or Cmd+C to copy.', 'ok');
+  }
+  function removeLogin(k) {
+    confirmDialog({ title: 'Remove ' + k.name + "'s sign-in?", body: k.login + ' can no longer sign in to the account page. Their key keeps working.', yes: 'Remove sign-in', no: 'Keep it' }).then(function (yes) {
+      if (!yes) return;
+      return api('DELETE', '/admin/keys/' + encodeURIComponent(k.name) + '/login').then(function () { say('Removed ' + k.name + "'s sign-in.", 'ok'); return load(); }).catch(fail);
+    });
+  }
+
   function openForm(key) {
     closeGrant(true);
+    state.inviting = null;
     state.adding = !key;
     state.editing = key ? key.name : null;
     $('form-title').textContent = key ? 'Edit ' + key.name : 'New key';
@@ -642,6 +619,7 @@ export const JS = String.raw`
   }
   function openGrant(k) {
     if (state.adding || state.editing) closeForm();
+    state.inviting = null;
     state.granting = k.name;
     $('grant-title').textContent = 'Give ' + k.name + ' temporary access';
     var have = {};
@@ -900,6 +878,10 @@ export const JS = String.raw`
     api('POST', '/admin/ui/logout').catch(function () {}).then(function () { showLogin(''); });
   });
   $('f-cancel').addEventListener('click', closeForm);
+  $('invite-form').addEventListener('submit', submitInvite);
+  $('i-cancel').addEventListener('click', closeInvite);
+  $('link-copy').addEventListener('click', copyLink);
+  $('link-done').addEventListener('click', function () { $('link-value').textContent = ''; $('link-panel').hidden = true; });
   $('key-form').addEventListener('submit', submitForm);
   $('grant-form').addEventListener('submit', submitGrant);
   $('g-cancel').addEventListener('click', function () { closeGrant(false); });

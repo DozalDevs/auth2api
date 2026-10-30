@@ -3,6 +3,7 @@ import { ApiKeyEntry, KeyGrant, STANDARD_GROUP } from "../config";
 import { ModelCatalog } from "../models/catalog";
 import { StatsRecorder } from "../stats/recorder";
 import { hashApiKey } from "../utils/common";
+import { MemberStore } from "../members/store";
 import { KeyPatch, KeyStore, KeyStoreError } from "./store";
 
 export function utcDay(date = new Date()): string {
@@ -23,7 +24,12 @@ function describeGrant(grant: KeyGrant, at: number, ended: boolean) {
   };
 }
 
-function describe(entry: ApiKeyEntry, store: KeyStore, stats?: StatsRecorder) {
+function describe(
+  entry: ApiKeyEntry,
+  store: KeyStore,
+  stats?: StatsRecorder,
+  members?: MemberStore,
+) {
   const at = store.now();
   const limit = entry["daily-token-limit"] ?? null;
   const used = stats
@@ -42,6 +48,13 @@ function describe(entry: ApiKeyEntry, store: KeyStore, stats?: StatsRecorder) {
     disabled: entry.disabled === true,
     admin: entry.admin === true,
     key_suffix: entry.key.slice(-4),
+    login: members?.forKey(entry.name)?.email ?? null,
+    invite: members?.pendingInvite(entry.name)
+      ? {
+          email: members.pendingInvite(entry.name)!.email,
+          expires_at: members.pendingInvite(entry.name)!["expires-at"],
+        }
+      : null,
     tokens_today: used,
     tokens_remaining_today:
       limit !== null && used !== null ? Math.max(0, limit - used) : null,
@@ -83,6 +96,7 @@ export function registerKeyRoutes(
   store: KeyStore,
   stats?: StatsRecorder,
   catalog?: ModelCatalog,
+  members?: MemberStore,
 ): void {
   const actor = (res: express.Response): string =>
     (res.locals.keyEntry as ApiKeyEntry | undefined)?.name ?? "an admin";
@@ -90,7 +104,9 @@ export function registerKeyRoutes(
   app.get(
     "/admin/keys",
     handle((_req, res) => {
-      res.json({ keys: store.list().map((e) => describe(e, store, stats)) });
+      res.json({
+        keys: store.list().map((e) => describe(e, store, stats, members)),
+      });
     }),
   );
 
@@ -108,7 +124,7 @@ export function registerKeyRoutes(
       });
       res
         .status(201)
-        .json({ ...describe(entry, store, stats), key: entry.key });
+        .json({ ...describe(entry, store, stats, members), key: entry.key });
     }),
   );
 
@@ -119,7 +135,7 @@ export function registerKeyRoutes(
         req.params.name,
         patchFromBody(req.body ?? {}),
       );
-      res.json(describe(entry, store, stats));
+      res.json(describe(entry, store, stats, members));
     }),
   );
 
@@ -133,7 +149,7 @@ export function registerKeyRoutes(
         actor(res),
       );
       res.status(201).json({
-        ...describe(entry, store, stats),
+        ...describe(entry, store, stats, members),
         grant: describeGrant(grant, store.now(), false),
       });
     }),
@@ -147,7 +163,7 @@ export function registerKeyRoutes(
         req.params.id,
         actor(res),
       );
-      res.json(describe(entry, store, stats));
+      res.json(describe(entry, store, stats, members));
     }),
   );
 
@@ -155,6 +171,7 @@ export function registerKeyRoutes(
     "/admin/keys/:name",
     handle((req, res) => {
       store.remove(req.params.name);
+      members?.removeForKey(req.params.name);
       res.status(204).end();
     }),
   );

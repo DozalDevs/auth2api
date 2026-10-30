@@ -20,7 +20,21 @@ import {
   registerRequestAdminRoutes,
   registerRequestRoutes,
 } from "./keys/requests";
-import { AccessRequest, ApiKeyEntry, CatalogModel } from "./config";
+import {
+  AccessRequest,
+  ApiKeyEntry,
+  CatalogModel,
+  Invite,
+  Member,
+} from "./config";
+import { MemberStore } from "./members/store";
+import {
+  originOf,
+  registerAccountRoutes,
+  registerMemberAdminRoutes,
+} from "./members/routes";
+import { SlackNotifier } from "./notify/slack";
+import { ACCOUNT_CSP, ACCOUNT_HTML } from "./ui/account";
 import { ModelCatalog } from "./models/catalog";
 import { resolveModel } from "./upstream/translator";
 import { GoKeyPool } from "./opencode-go/pool";
@@ -52,6 +66,8 @@ export function createServer(
     persistKeys?: (entries: ApiKeyEntry[]) => void;
     persistCatalog?: (models: CatalogModel[]) => void;
     persistRequests?: (requests: AccessRequest[]) => void;
+    persistMembers?: (members: Member[]) => void;
+    persistInvites?: (invites: Invite[]) => void;
     now?: () => number;
   } = {},
 ): express.Application {
@@ -77,6 +93,32 @@ export function createServer(
     catalog,
     { persist: opts.persistRequests },
   );
+  const members = new MemberStore(config.members ?? [], config.invites ?? [], {
+    resolveKey: (name) => keyStore.get(name)?.name,
+    persistMembers: opts.persistMembers,
+    persistInvites: opts.persistInvites,
+    now: opts.now,
+  });
+  const memberSessions = new SessionStore();
+  const memberLoginThrottle = new LoginThrottle();
+  const slack = config.notifications?.slack;
+  const notifier = slack ? new SlackNotifier(slack) : undefined;
+  const publicUrl = config["public-url"];
+  const announceRequest = (created: AccessRequest) => {
+    if (!notifier) return;
+    const names = created.models.map(
+      (id) =>
+        catalog.list().find((m) => m.id.toLowerCase() === id.toLowerCase())
+          ?.name ?? id,
+    );
+    void notifier.requestCreated({
+      key: created.key,
+      modelNames: names,
+      minutes: created.minutes,
+      reason: created.reason,
+      reviewUrl: publicUrl ? `${publicUrl}/admin/ui?tab=requests` : undefined,
+    });
+  };
   const goPool = new GoKeyPool(config["opencode-go"]?.keys ?? []);
 
   app.use(express.json({ limit: config["body-limit"] }));
@@ -253,6 +295,32 @@ export function createServer(
       .send(DASHBOARD_HTML);
   });
 
+  const accountUrl = (req: express.Request, model: string) =>
+    `${publicUrl ?? originOf(req)}/account?ask=${encodeURIComponent(model)}`;
+  app.get(["/account", "/account/"], (_req, res) => {
+    res
+      .set({
+        "Content-Security-Policy": ACCOUNT_CSP,
+        "Cache-Control": "no-store",
+        "Referrer-Policy": "no-referrer",
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+      })
+      .type("html")
+      .send(ACCOUNT_HTML);
+  });
+  registerAccountRoutes(app, {
+    keys: keyStore,
+    catalog,
+    requests: accessRequests,
+    members,
+    stats: statsRecorder,
+    sessions: memberSessions,
+    loginThrottle: memberLoginThrottle,
+    rateLimit,
+    onRequestCreated: announceRequest,
+  });
+
   const requireAdmin: express.RequestHandler = (_req, res, next) => {
     if (!(res.locals.keyEntry as ApiKeyEntry).admin) {
       res.status(403).json({ error: { message: "Admin key required" } });
@@ -351,7 +419,8 @@ export function createServer(
   app.use("/admin", adminAuth);
   app.use("/admin", statsFinishMiddleware);
   app.use("/admin", requireAdmin);
-  registerKeyRoutes(app, keyStore, statsRecorder, catalog);
+  registerKeyRoutes(app, keyStore, statsRecorder, catalog, members);
+  registerMemberAdminRoutes(app, { keys: keyStore, members, publicUrl });
   registerGoAdminRoutes(app, config, goPool, catalog);
   registerRequestAdminRoutes(app, accessRequests, keyStore);
 
@@ -436,10 +505,13 @@ export function createServer(
       .send(lines.length ? `${lines.join("\n")}\n` : "");
   });
 
-  registerRequestRoutes(app, accessRequests, keyStore, [
-    requireApiKey,
-    rateLimit,
-  ]);
+  registerRequestRoutes(
+    app,
+    accessRequests,
+    keyStore,
+    [requireApiKey, rateLimit],
+    announceRequest,
+  );
 
   app.use(["/v1", "/codex", "/backend-api/codex"], requireApiKey);
   app.use(["/v1", "/codex", "/backend-api/codex"], statsFinishMiddleware);
@@ -466,8 +538,8 @@ export function createServer(
         res.status(403).json({
           error: {
             message: ended
-              ? `Your temporary access to "${model}" ended ${agoText(keyStore.now() - Date.parse(ended.until))}. Ask the engineering team for more time.`
-              : `"${model}" is not enabled for this key. Ask the engineering team for access, or request temporary access with POST /access-requests {"model":"${model}","reason":"why you need it"}.`,
+              ? `Your temporary access to "${model}" ended ${agoText(keyStore.now() - Date.parse(ended.until))}. Ask for more time at ${accountUrl(req, model)}, or ask the engineering team.`
+              : `"${model}" is not on your key. Ask for it at ${accountUrl(req, model)}, or ask the engineering team.`,
             type: "model_not_allowed",
             ...(ended && { code: "grant_expired" }),
           },
