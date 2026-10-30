@@ -113,18 +113,37 @@ export class KeyStore {
     );
   }
 
-  /** Whether `entry` may call `model` now (alias-resolved on both sides). */
-  allows(entry: ApiKeyEntry, model: string, at = this.now()): boolean {
+  get(name: string): ApiKeyEntry | undefined {
+    return this.find(name);
+  }
+
+  /** Whether the key's own list covers `model`, ignoring temporary grants. */
+  baseAllows(entry: ApiKeyEntry, model: string): boolean {
     if (entry.models.includes("*")) return true;
     const want = resolveModel(model);
     const covers = (m: string) => resolveModel(m) === want;
     if (entry.models.includes(STANDARD_GROUP) && this.standard().some(covers)) {
       return true;
     }
-    return (
-      entry.models.some(covers) ||
-      this.activeGrants(entry, at).some((g) => g.models.some(covers))
+    return entry.models.some(covers);
+  }
+
+  /** The grant that is the only reason `entry` can use `model` right now, if any. */
+  loanFor(
+    entry: ApiKeyEntry,
+    model: string,
+    at = this.now(),
+  ): KeyGrant | undefined {
+    if (this.baseAllows(entry, model)) return undefined;
+    const want = resolveModel(model);
+    return this.activeGrants(entry, at).find((g) =>
+      g.models.some((m) => resolveModel(m) === want),
     );
+  }
+
+  /** Whether `entry` may call `model` now (alias-resolved on both sides). */
+  allows(entry: ApiKeyEntry, model: string, at = this.now()): boolean {
+    return this.baseAllows(entry, model) || !!this.loanFor(entry, model, at);
   }
 
   private standard(): string[] {

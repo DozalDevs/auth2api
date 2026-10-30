@@ -194,7 +194,10 @@ test("ask, approve, use it, and watch it end on its own", async (t) => {
   const { call, chat, clock } = await startApp(t);
   const denied = await chat(MARIA, "gpt-6-astra");
   assert.equal(denied.status, 403);
-  assert.match(denied.body.error.message, /POST \/access-requests/);
+  assert.match(
+    denied.body.error.message,
+    /is not on your key\. Ask for it at http:\/\/127\.0\.0\.1:\d+\/account\?ask=go%2Fkimi-k3|account\?ask=gpt-6-astra/,
+  );
 
   const asked = await call("POST", "/access-requests", MARIA, {
     models: ["gpt-6-astra"],

@@ -81,3 +81,34 @@ test("the CSP allows exactly the page's own script and stylesheet and nothing in
   assert.equal(/\son[a-z]+\s*=/.test(html), false, "inline event handler");
   assert.equal(/<script[^>]*\ssrc=/.test(html), false, "external script");
 });
+
+test("the account page is public, locked down the same way, and its API is not open", async (t) => {
+  const base = await startApp(t);
+  const page = await fetch(`${base}/account`);
+  assert.equal(page.status, 200);
+  assert.equal(page.headers.get("cache-control"), "no-store");
+  assert.equal(page.headers.get("x-frame-options"), "DENY");
+  const csp = page.headers.get("content-security-policy") || "";
+  const html = await page.text();
+  assert.equal(html.includes(ADMIN), false);
+
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)![1];
+  const style = html.match(/<style>([\s\S]*?)<\/style>/)![1];
+  const hash = (s: string) =>
+    `'sha256-${crypto.createHash("sha256").update(s).digest("base64")}'`;
+  assert.ok(csp.includes(`script-src ${hash(script)}`));
+  assert.ok(csp.includes(`style-src ${hash(style)}`));
+  assert.equal(csp.includes("unsafe-inline"), false);
+  assert.equal(/\sstyle\s*=/.test(html), false, "inline style attribute");
+  assert.equal(/\son[a-z]+\s*=/.test(html), false, "inline event handler");
+
+  assert.equal((await fetch(`${base}/account/api/me`)).status, 401);
+  assert.equal(
+    (
+      await fetch(`${base}/account/api/me`, {
+        headers: { authorization: `Bearer ${ADMIN}` },
+      })
+    ).status,
+    401,
+  );
+});

@@ -56,6 +56,16 @@ export const BODY = String.raw`
         <div class="actions"><button id="secret-done" type="button">Done</button></div>
       </div>
 
+      <div id="link-panel" class="secret-box" hidden>
+        <h2>Sign-in link for <span id="link-name"></span></h2>
+        <div class="secret-top">
+          <span class="muted" id="link-note"></span>
+          <button id="link-copy" class="primary quiet" type="button">Copy link</button>
+        </div>
+        <code id="link-value" class="secret"></code>
+        <div class="actions"><button id="link-done" type="button">Done</button></div>
+      </div>
+
       <div id="keys-bar" class="bar"></div>
       <div id="keys"></div>
     </section>
@@ -124,6 +134,21 @@ export const BODY = String.raw`
         <div class="actions">
           <button id="f-save" class="primary" type="submit">Create key</button>
           <button id="f-cancel" type="button">Cancel</button>
+        </div>
+      </form>
+
+      <form id="invite-form" class="formcard">
+        <h2 id="invite-title"></h2>
+        <div class="fields">
+          <div>
+            <label for="i-email">Their email</label>
+            <input id="i-email" type="text" inputmode="email" required autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="maria@example.com">
+            <p class="hint">You get a one-time link to send them. They use it to choose a password, then sign in with this email. It works for 7 days.</p>
+          </div>
+        </div>
+        <div class="actions">
+          <button id="i-save" class="primary" type="submit">Create link</button>
+          <button id="i-cancel" type="button">Cancel</button>
         </div>
       </form>
 
