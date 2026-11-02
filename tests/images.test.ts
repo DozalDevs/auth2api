@@ -548,3 +548,86 @@ test("a picture is recorded in the usage report under the image model", async (t
   assert.equal(row.requests, 1);
   assert.equal(row.outputTokens, 515);
 });
+
+test("with no model named, a picture falls back to the next image model the key may use when ChatGPT cannot serve it", async (t) => {
+  const go = await startGo();
+  t.after(() => go.close());
+  const catalog = CATALOG.map((m) =>
+    m.id === "go/image-gpt-6-luna" ? { ...m, access: "standard" as const } : m,
+  );
+  const { call, upstream } = await startApp(t, {
+    go,
+    catalog,
+    upstream: () => ({ status: 503, body: { error: { message: "busy" } } }),
+  });
+
+  const fell = await call("POST", "/v1/images/generations", FULL, {
+    prompt: "a blue square",
+  });
+  assert.equal(fell.status, 200, fell.text);
+  assert.equal(fell.body.data[0].b64_json, PNG);
+  assert.ok(upstream.length >= 1, "ChatGPT was tried first");
+  assert.equal(go.seen.length, 1, "then Go answered");
+
+  const usage = await call("GET", "/admin/usage?days=1", ADMIN);
+  assert.ok(
+    usage.body.rows.find((x: any) => x.model === "go/image-gpt-6-luna"),
+    "the picture is recorded under the model that made it",
+  );
+
+  const named = await call("POST", "/v1/images/generations", FULL, {
+    prompt: "x",
+    model: "gpt-image-2",
+  });
+  assert.equal(
+    named.status,
+    503,
+    "a caller who names a model gets that model or an honest error, never a quiet swap",
+  );
+  assert.equal(go.seen.length, 1);
+});
+
+test("the fallback never uses a model the key may not use, and never covers a refusal", async (t) => {
+  const go = await startGo();
+  t.after(() => go.close());
+  const a = await startApp(t, {
+    go,
+    upstream: () => ({ status: 503, body: { error: { message: "busy" } } }),
+  });
+  const noGo = await a.call("POST", "/v1/images/generations", FULL, {
+    prompt: "x",
+  });
+  assert.equal(
+    noGo.status,
+    503,
+    "the Go picture model is on request and this key has no loan, so there is no fallback",
+  );
+  assert.equal(go.seen.length, 0);
+
+  const catalog = CATALOG.map((m) =>
+    m.id === "go/image-gpt-6-luna" ? { ...m, access: "standard" as const } : m,
+  );
+  const b = await startApp(t, {
+    go,
+    catalog,
+    upstream: () => ({
+      status: 400,
+      body: {
+        error: { message: "Your request was rejected by the safety system." },
+      },
+    }),
+  });
+  const refused = await b.call("POST", "/v1/images/generations", FULL, {
+    prompt: "x",
+  });
+  assert.equal(refused.status, 400);
+  assert.equal(
+    refused.body.error.message,
+    "Your request was rejected by the safety system.",
+  );
+  assert.equal(
+    go.seen.length,
+    0,
+    "a refusal is the answer, not a reason to try another service",
+  );
+});

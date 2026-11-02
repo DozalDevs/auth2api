@@ -12,6 +12,8 @@ const LUNA = ["gpt-6-luna", "gpt-5.6-luna"];
 const WIDE = [...LUNA, "gpt-6-sol", "gpt-5.6-sol", "gpt-6-astra"];
 const NOT_SERVED = ["gpt-6.1-sol", "gpt-6.1-terra"];
 
+export const PLUGIN_TEXT =
+  '// stand-in plugin\nexport default { id: "dozaldevs.images" };\n';
 export const SETUP_CODE = "good-setup-code-0123456789abcdefghij";
 
 export const CATALOG: {
@@ -30,6 +32,8 @@ export const CATALOG: {
 export interface MockOptions {
   /** Pretend to be an older relay that has no /setup/models. */
   legacy?: boolean;
+  /** Pretend the relay has no image tools to install. */
+  noPlugin?: boolean;
 }
 
 export interface MockRelay {
@@ -61,6 +65,12 @@ export async function startMockRelay(
         model: body.model,
       });
       if (req.url === "/health") return json(200, { status: "ok" });
+      if (req.url === "/setup/image-plugin.js" && req.method === "GET") {
+        if (options.noPlugin)
+          return json(404, { error: { message: "no plugin" } });
+        res.writeHead(200, { "content-type": "text/plain" });
+        return res.end(PLUGIN_TEXT);
+      }
       if (req.url === "/setup/redeem" && req.method === "POST") {
         if (key)
           return json(400, {

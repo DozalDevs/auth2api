@@ -27,6 +27,8 @@ export type ImageOutcome =
       quality?: string;
       background?: string;
       account: string;
+      /** The image model that actually made the picture; set by the route. */
+      model: string;
     }
   | { ok: false; status: number; message: string; type: string };
 
@@ -142,6 +144,7 @@ export async function imageViaCodex(
         quality: j.quality,
         background: j.background,
         account: email,
+        model: "",
       };
     }
     const text = await res.text().catch(() => "");
@@ -277,5 +280,6 @@ export async function imageViaGo(
     quality: item.quality,
     background: item.background,
     account: pool.label(call.index),
+    model: "",
   };
 }

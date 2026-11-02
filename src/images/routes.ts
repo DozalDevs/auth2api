@@ -3,6 +3,7 @@ import { CatalogModel, Config } from "../config";
 import { GoKeyPool } from "../opencode-go/pool";
 import { isGoModel } from "../opencode-go/proxy";
 import { ModelCatalog } from "../models/catalog";
+import { KeyStore } from "../keys/store";
 import { ProviderRegistry } from "../providers/registry";
 import { KeyStoreError } from "../keys/store";
 import { ImageOutcome, imageViaCodex, imageViaGo, OneImage } from "./upstream";
@@ -46,7 +47,10 @@ export function defaultImageModel(
       !(typeof req.body.model === "string" && req.body.model.trim())
     ) {
       const first = imageModels(catalog)[0];
-      if (first) req.body.model = first.id;
+      if (first) {
+        req.body.model = first.id;
+        _res.locals.imageModelDefaulted = true;
+      }
     }
     next();
   };
@@ -57,7 +61,11 @@ export interface ImageRouteDeps {
   registry: ProviderRegistry;
   catalog: ModelCatalog;
   goPool: GoKeyPool;
+  keys: KeyStore;
 }
+
+/** Failures that mean "this service cannot serve you right now", as opposed to "your request is wrong". */
+const FALL_BACK_ON = new Set([429, 500, 502, 503, 504]);
 
 function sum(a: UsageData, b: UsageData): UsageData {
   return {
@@ -103,18 +111,23 @@ export function registerImageRoutes(
           `"${parsed.model}" is not an image model on this relay. Image models: ${models.map((m) => m.id).join(", ")}.`,
         );
       }
-      const viaGo = isGoModel(model.id);
+      const entry = res.locals.keyEntry;
+      const candidates: CatalogModel[] = res.locals.imageModelDefaulted
+        ? models.filter(
+            (m) => m === model || (entry && deps.keys.allows(entry, m.id)),
+          )
+        : [model];
       if (stats) {
         stats.model = model.id;
-        stats.provider = viaGo ? "opencode-go" : "codex";
+        stats.provider = isGoModel(model.id) ? "opencode-go" : "codex";
       }
 
       const gone = new AbortController();
       res.on("close", () => {
         if (!res.writableEnded) gone.abort();
       });
-      const one = (): Promise<ImageOutcome> =>
-        viaGo
+      const tryModel = (m: CatalogModel): Promise<ImageOutcome> =>
+        isGoModel(m.id)
           ? imageViaGo(
               {
                 config: deps.config,
@@ -134,6 +147,18 @@ export function registerImageRoutes(
               parsed,
               undefined,
             );
+      const one = async (): Promise<ImageOutcome> => {
+        let last: ImageOutcome | undefined;
+        for (const m of candidates) {
+          last = await tryModel(m);
+          if (last.ok) return { ...last, model: m.id };
+          if (!FALL_BACK_ON.has(last.status) || gone.signal.aborted) break;
+          console.log(
+            `[images] ${m.id} could not serve this request (${last.status}); trying the next image model`,
+          );
+        }
+        return last!;
+      };
 
       const settled = await Promise.all(
         Array.from({ length: parsed.n }, () => one()),
@@ -156,6 +181,8 @@ export function registerImageRoutes(
       if (stats) {
         stats.usage = usage;
         stats.accountEmail = good[0].account;
+        stats.model = good[0].model;
+        stats.provider = isGoModel(good[0].model) ? "opencode-go" : "codex";
       }
       const data: OneImage[] = good.map((g) => g.image);
       res.json({

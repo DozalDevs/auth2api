@@ -641,7 +641,13 @@ export function createServer(
     );
   }
 
-  registerImageRoutes(app, { config, registry, catalog, goPool });
+  registerImageRoutes(app, {
+    config,
+    registry,
+    catalog,
+    goPool,
+    keys: keyStore,
+  });
 
   app.get("/v1/models", async (_req, res) => {
     const entry = res.locals.keyEntry as ApiKeyEntry;

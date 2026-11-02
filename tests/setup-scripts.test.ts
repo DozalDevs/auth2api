@@ -10,7 +10,12 @@ import { AddressInfo } from "node:net";
 import { Config } from "../src/config";
 import { createServer } from "../src/server";
 import { buildRegistry } from "../src/providers/registry";
-import { KEYS, SETUP_CODE, startMockRelay } from "./helpers/mock-relay";
+import {
+  KEYS,
+  PLUGIN_TEXT,
+  SETUP_CODE,
+  startMockRelay,
+} from "./helpers/mock-relay";
 
 const SETUP_DIR = path.resolve(__dirname, "..", "setup");
 const IS_WINDOWS = process.platform === "win32";
@@ -114,6 +119,7 @@ interface Sandbox {
   data: string;
   configFile: string;
   keyFile: string;
+  pluginFile: string;
   root: string;
 }
 
@@ -129,6 +135,7 @@ function sandbox(): Sandbox {
     data,
     configFile: path.join(config, "opencode", "opencode.json"),
     keyFile: path.join(data, "opencode", "dozaldevs-relay.key"),
+    pluginFile: path.join(config, "opencode", "plugins", "dozaldevs-images.js"),
   };
 }
 
@@ -270,7 +277,7 @@ for (const r of runners) {
     const before = files(sb).map((f) => [f, fs.readFileSync(f, "utf-8")]);
     const again = await run(r, sb, relay.url, KEYS.luna);
     assert.equal(again.code, 0, again.out);
-    assert.equal((again.out.match(/unchanged/g) || []).length, 2, again.out);
+    assert.equal((again.out.match(/unchanged/g) || []).length, 3, again.out);
     assert.deepEqual(
       files(sb).map((f) => [f, fs.readFileSync(f, "utf-8")]),
       before,
@@ -589,6 +596,45 @@ for (const r of runners) {
     assert.equal((await run(r, sb, relay.url, KEYS.luna)).code, 0);
     assert.equal(readJson(sb.configFile).model, "dozaldevs-relay/gpt-6-luna");
     assert.equal(fs.readFileSync(sb.keyFile, "utf-8"), KEYS.luna);
+  });
+
+  test(`${r.name}: the image tools are installed, refreshed on a re-run, and a missing plugin never stops the setup`, async (t) => {
+    const relay = await startMockRelay();
+    const sb = sandbox();
+    t.after(() => relay.close());
+    const first = await run(r, sb, relay.url, KEYS.luna);
+    assert.equal(first.code, 0, first.out);
+    assert.match(first.out, /Image tools: created/);
+    assert.equal(fs.readFileSync(sb.pluginFile, "utf-8"), PLUGIN_TEXT);
+
+    const again = await run(r, sb, relay.url, KEYS.luna);
+    assert.match(again.out, /Image tools: unchanged/);
+    fs.writeFileSync(sb.pluginFile, "// old version");
+    const updated = await run(r, sb, relay.url, KEYS.luna);
+    assert.match(updated.out, /Image tools: updated/);
+    assert.equal(fs.readFileSync(sb.pluginFile, "utf-8"), PLUGIN_TEXT);
+
+    const check = await run(r, sb, relay.url, undefined, [r.checkFlag]);
+    assert.equal(check.code, 0, check.out);
+    assert.equal(
+      check.out.includes("Image tools"),
+      false,
+      "--check changes and installs nothing",
+    );
+
+    const bare = await startMockRelay({ noPlugin: true });
+    const sb2 = sandbox();
+    t.after(() => bare.close());
+    const res = await run(r, sb2, bare.url, KEYS.luna);
+    assert.equal(res.code, 0, res.out);
+    assert.match(res.out, /Could not install the image tools/);
+    assert.match(res.out, /All set/);
+    assert.equal(fs.existsSync(sb2.pluginFile), false);
+    assert.equal(
+      fs.readFileSync(sb2.keyFile, "utf-8"),
+      KEYS.luna,
+      "everything else was still set up",
+    );
   });
 
   test(`${r.name}: a setup code sets everything up without any key being typed, and never prints the key`, async (t) => {
