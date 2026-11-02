@@ -8,6 +8,10 @@ import { withTimeoutSignal } from "../utils/abort";
 const BASE_URL = "https://chatgpt.com/backend-api";
 const RESPONSES_PATH = "/codex/responses";
 const RESPONSES_COMPACT_PATH = "/codex/responses/compact";
+export const IMAGES_GENERATIONS_PATH = "/codex/images/generations";
+export const IMAGES_EDITS_PATH = "/codex/images/edits";
+/** One image takes 10 to 40 seconds upstream; the general message timeout is too tight for the slow cases. */
+export const IMAGE_TIMEOUT_MS = 180_000;
 
 const DEFAULT_ORIGINATOR = "codex_cli_rs";
 // The backend version-gates models on this. gpt-5.3-codex needed a bump from
@@ -185,6 +189,34 @@ function conversationCacheKey(request: Request, body: any): string {
 
 /** @internal — exported for unit tests; do not use from app code. */
 export const __conversationCacheKey = conversationCacheKey;
+
+export async function callCodexImages(options: {
+  path: typeof IMAGES_GENERATIONS_PATH | typeof IMAGES_EDITS_PATH;
+  body: unknown;
+  account: AvailableAccount;
+  config: Config;
+  signal?: AbortSignal;
+}): Promise<Response> {
+  const headers = buildHeaders(options.account, false, options.config);
+  const timeoutMs = Math.max(
+    options.config.timeouts["messages-ms"],
+    IMAGE_TIMEOUT_MS,
+  );
+  try {
+    return await fetch(`${BASE_URL}${options.path}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(options.body),
+      signal: withTimeoutSignal(timeoutMs, options.signal),
+    });
+  } catch (err: any) {
+    const cause = err?.cause;
+    const detail = cause
+      ? `${cause.code || cause.name || "error"}: ${cause.message || String(cause)}`
+      : err?.message || String(err);
+    throw new Error(`codex upstream fetch failed: ${detail}`);
+  }
+}
 
 export interface CallCodexResponsesOptions {
   body?: any;

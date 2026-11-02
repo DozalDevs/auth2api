@@ -40,6 +40,7 @@ import {
 } from "./members/routes";
 import { SetupCodeStore } from "./members/setup-codes";
 import { SlackNotifier } from "./notify/slack";
+import { defaultImageModel, registerImageRoutes } from "./images/routes";
 import { ACCOUNT_CSP, ACCOUNT_HTML } from "./ui/account";
 import { ModelCatalog } from "./models/catalog";
 import { resolveModel } from "./upstream/translator";
@@ -548,6 +549,7 @@ export function createServer(
     const lines: string[] = [];
     for (const m of catalog.list()) {
       listed.add(resolveModel(m.id));
+      if (m.kind === "image") continue;
       if (keyStore.allows(entry, m.id)) {
         lines.push(`${m.id}\tallowed\t${m.name}`);
       } else if (m.access === "on_request") {
@@ -573,6 +575,7 @@ export function createServer(
 
   app.use(["/v1", "/codex", "/backend-api/codex"], requireApiKey);
   app.use(["/v1", "/codex", "/backend-api/codex"], statsFinishMiddleware);
+  app.use("/v1/images", defaultImageModel(catalog));
 
   // Per-key policy for calls that consume the subscription: model allowlist
   // (checked after alias resolution) and the daily token cap. Runs after the
@@ -638,6 +641,8 @@ export function createServer(
     );
   }
 
+  registerImageRoutes(app, { config, registry, catalog, goPool });
+
   app.get("/v1/models", async (_req, res) => {
     const entry = res.locals.keyEntry as ApiKeyEntry;
     const created = Math.floor(Date.now() / 1000);
@@ -657,7 +662,13 @@ export function createServer(
     for (const m of catalog.list()) {
       if (reported.has(resolveModel(m.id)) || !keyStore.allows(entry, m.id))
         continue;
-      data.push({ id: m.id, object: "model", created, owned_by: "relay" });
+      data.push({
+        id: m.id,
+        object: "model",
+        created,
+        owned_by: "relay",
+        ...(m.kind === "image" && { type: "image" }),
+      } as (typeof data)[number]);
     }
     res.json({ object: "list", data });
   });

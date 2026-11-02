@@ -35,6 +35,38 @@ export function goBase(config: Config): string {
   );
 }
 
+/** Headers Go expects from a relay: who we are, and a stable session id so it can route and cache. */
+export function goRequestHeaders(
+  req: express.Request,
+  res: express.Response,
+): Record<string, string> {
+  const baseHeaders: Record<string, string> = {
+    "content-type": "application/json",
+    accept: typeof req.headers.accept === "string" ? req.headers.accept : "*/*",
+    // Go asks clients to identify themselves rather than look like a generic HTTP library.
+    "user-agent": "dozaldevs-relay/1.0",
+  };
+  // Go refuses a request with no session id, so every request carries one: the
+  // caller's own if it sent one, otherwise a stable id for that caller, so Go
+  // can still route and cache sensibly.
+  const sessionOk = (v: unknown): v is string =>
+    typeof v === "string" && /^[\x21-\x7e]{1,200}$/.test(v);
+  const claude = req.headers["x-claude-code-session-id"];
+  const given = [req.headers["x-opencode-session"], claude].find(sessionOk);
+  const caller =
+    (res.locals.keyEntry as { name?: string } | undefined)?.name ?? "anonymous";
+  baseHeaders["x-opencode-session"] =
+    given ??
+    `relay-${crypto.createHash("sha256").update(caller).digest("hex").slice(0, 16)}`;
+  if (sessionOk(claude)) baseHeaders["x-claude-code-session-id"] = claude;
+  for (const h of ["anthropic-version", "anthropic-beta"]) {
+    const v = req.headers[h];
+    if (typeof v === "string" && /^[\x20-\x7e]{1,200}$/.test(v))
+      baseHeaders[h] = v;
+  }
+  return baseHeaders;
+}
+
 /**
  * Sends a request for a go/<model> straight to OpenCode Go with a key from the
  * pool. Go speaks the OpenAI, Responses and Anthropic formats itself, so the
@@ -78,34 +110,7 @@ export function createGoHandler(
       };
     }
     const payload = JSON.stringify(body);
-    const url = `${goBase(config)}${PATHS[kind]}`;
-
-    const baseHeaders: Record<string, string> = {
-      "content-type": "application/json",
-      accept:
-        typeof req.headers.accept === "string" ? req.headers.accept : "*/*",
-      // Go asks clients to identify themselves rather than look like a generic HTTP library.
-      "user-agent": "dozaldevs-relay/1.0",
-    };
-    // Go refuses a request with no session id, so every request carries one: the
-    // caller's own if it sent one, otherwise a stable id for that caller, so Go
-    // can still route and cache sensibly.
-    const sessionOk = (v: unknown): v is string =>
-      typeof v === "string" && /^[\x21-\x7e]{1,200}$/.test(v);
-    const claude = req.headers["x-claude-code-session-id"];
-    const given = [req.headers["x-opencode-session"], claude].find(sessionOk);
-    const caller =
-      (res.locals.keyEntry as { name?: string } | undefined)?.name ??
-      "anonymous";
-    baseHeaders["x-opencode-session"] =
-      given ??
-      `relay-${crypto.createHash("sha256").update(caller).digest("hex").slice(0, 16)}`;
-    if (sessionOk(claude)) baseHeaders["x-claude-code-session-id"] = claude;
-    for (const h of ["anthropic-version", "anthropic-beta"]) {
-      const v = req.headers[h];
-      if (typeof v === "string" && /^[\x20-\x7e]{1,200}$/.test(v))
-        baseHeaders[h] = v;
-    }
+    const baseHeaders = goRequestHeaders(req, res);
 
     const gone = new AbortController();
     res.on("close", () => {
@@ -117,47 +122,27 @@ export function createGoHandler(
         : config.timeouts["messages-ms"];
     const signal = AbortSignal.any([gone.signal, AbortSignal.timeout(limitMs)]);
 
-    let refused: { status: number; type: string; text: string } | null = null;
-    for (const index of pool.order(upstreamModel)) {
-      const headers: Record<string, string> = {
-        ...baseHeaders,
-        authorization: `Bearer ${pool.key(index)}`,
-      };
-      if (kind === "messages" || kind === "count")
-        headers["x-api-key"] = pool.key(index);
-      let up: Response;
-      try {
-        up = await fetch(url, {
-          method: "POST",
-          headers,
-          body: payload,
-          signal,
-        });
-      } catch {
-        if (gone.signal.aborted) return;
-        pool.note(index, 0);
-        continue;
-      }
-      pool.note(index, up.status);
-      if (NEXT_KEY.has(up.status)) {
-        refused = {
-          status: up.status,
-          type: up.headers.get("content-type") ?? "application/json",
-          text: await up.text().catch(() => ""),
-        };
-        continue;
-      }
-      if (up.status < 400) pool.markGood(upstreamModel, index);
-      if (stats) stats.accountEmail = pool.label(index);
-      await relayReply(up, res, stats);
+    const call = await callGo({
+      config,
+      pool,
+      upstreamModel,
+      kind,
+      payload,
+      headers: baseHeaders,
+      signal,
+      gone: gone.signal,
+    });
+    if (call.kind === "aborted") return;
+    if (call.kind === "reply") {
+      if (stats) stats.accountEmail = pool.label(call.index);
+      await relayReply(call.up, res, stats);
       return;
     }
-
-    if (refused) {
+    if (call.kind === "refused") {
       // Every key was refused. Pass Go's own explanation through: it says whether
       // this is a usage limit, a bad key or a privacy setting on the workspace.
-      if (stats) stats.failureKind = `upstream_${refused.status}`;
-      res.status(refused.status).type(refused.type).send(refused.text);
+      if (stats) stats.failureKind = `upstream_${call.status}`;
+      res.status(call.status).type(call.type).send(call.text);
       return;
     }
     fail(
@@ -166,6 +151,63 @@ export function createGoHandler(
       "Could not reach OpenCode Go. Try again in a moment.",
     );
   };
+}
+
+export type GoCall =
+  | { kind: "reply"; up: Response; index: number }
+  | { kind: "refused"; status: number; type: string; text: string }
+  | { kind: "unreachable" }
+  | { kind: "aborted" };
+
+/**
+ * Sends one request to Go, starting on the key that last worked for this model
+ * and moving to the next only when Go refuses a key (401, 402, 403 or 429).
+ */
+export async function callGo(o: {
+  config: Config;
+  pool: GoKeyPool;
+  upstreamModel: string;
+  kind: GoKind;
+  payload: string;
+  headers: Record<string, string>;
+  signal: AbortSignal;
+  gone?: AbortSignal;
+}): Promise<GoCall> {
+  const url = `${goBase(o.config)}${PATHS[o.kind]}`;
+  let refused: { status: number; type: string; text: string } | null = null;
+  for (const index of o.pool.order(o.upstreamModel)) {
+    const headers: Record<string, string> = {
+      ...o.headers,
+      authorization: `Bearer ${o.pool.key(index)}`,
+    };
+    if (o.kind === "messages" || o.kind === "count")
+      headers["x-api-key"] = o.pool.key(index);
+    let up: Response;
+    try {
+      up = await fetch(url, {
+        method: "POST",
+        headers,
+        body: o.payload,
+        signal: o.signal,
+      });
+    } catch {
+      if (o.gone?.aborted) return { kind: "aborted" };
+      o.pool.note(index, 0);
+      continue;
+    }
+    o.pool.note(index, up.status);
+    if (NEXT_KEY.has(up.status)) {
+      refused = {
+        status: up.status,
+        type: up.headers.get("content-type") ?? "application/json",
+        text: await up.text().catch(() => ""),
+      };
+      continue;
+    }
+    if (up.status < 400) o.pool.markGood(o.upstreamModel, index);
+    return { kind: "reply", up, index };
+  }
+  return refused ? { kind: "refused", ...refused } : { kind: "unreachable" };
 }
 
 async function relayReply(

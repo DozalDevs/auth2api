@@ -135,6 +135,8 @@ export interface CatalogModel {
   id: string;
   name: string;
   access: ModelAccess;
+  /** Absent means a chat model. Image models are used through /v1/images and are not offered to OpenCode as chat models. */
+  kind?: "image";
 }
 
 export interface DashboardUser {
@@ -394,7 +396,16 @@ export function validateCatalogModel(m: unknown, where: string): CatalogModel {
   if (access !== "standard" && access !== "on_request") {
     throw new Error(`${where}: access must be "standard" or "on_request"`);
   }
-  return { id: o.id, name: o.name.trim(), access };
+  const kind = o.kind ?? "chat";
+  if (kind !== "chat" && kind !== "image") {
+    throw new Error(`${where}: kind must be "chat" or "image"`);
+  }
+  return {
+    id: o.id,
+    name: o.name.trim(),
+    access,
+    ...(kind === "image" && { kind: "image" as const }),
+  };
 }
 
 export function validateOpenCodeGo(raw: unknown): OpenCodeGoConfig | undefined {
