@@ -44,6 +44,7 @@ import { defaultImageModel, registerImageRoutes } from "./images/routes";
 import { ACCOUNT_CSP, ACCOUNT_HTML } from "./ui/account";
 import { ModelCatalog } from "./models/catalog";
 import { resolveModel } from "./upstream/translator";
+import { AccountStatus } from "./accounts/manager";
 import { GoKeyPool } from "./opencode-go/pool";
 import { createGoHandler, isGoModel } from "./opencode-go/proxy";
 import { registerGoAdminRoutes } from "./opencode-go/routes";
@@ -647,6 +648,34 @@ export function createServer(
     catalog,
     goPool,
     keys: keyStore,
+  });
+
+  // GET /v1/status — account health for the providers this key can reach, for
+  // callers deciding whether to send a call now. Any valid key may read it, so it
+  // carries health only: no emails, plans, tokens, usage or other keys' data.
+  // /admin/accounts stays the operator's full view.
+  app.get("/v1/status", (_req, res) => {
+    const entry = res.locals.keyEntry as ApiKeyEntry;
+    const reachable = new Set<string>();
+    if (entry.models.includes("*")) {
+      registry.all().forEach((p) => reachable.add(p.id));
+    } else {
+      for (const id of keyStore.allowedIds(entry)) {
+        if (!isGoModel(id)) reachable.add(registry.forModel(id).id);
+      }
+    }
+    const providers: Record<
+      string,
+      { accounts: AccountStatus[]; account_count: number }
+    > = {};
+    for (const p of registry.all()) {
+      if (!reachable.has(p.id)) continue;
+      providers[p.id] = {
+        accounts: p.manager.getStatuses(),
+        account_count: p.manager.accountCount,
+      };
+    }
+    res.json({ providers, generated_at: new Date().toISOString() });
   });
 
   app.get("/v1/models", async (_req, res) => {

@@ -125,6 +125,20 @@ export interface AccountSnapshot {
   planType?: string;
 }
 
+/**
+ * What a non-admin key may see about an account: health only. No email, plan,
+ * token, usage or any text an upstream wrote. `lastError` is the failure kind
+ * (rate_limit, auth, forbidden, server, network), never the message.
+ */
+export interface AccountStatus {
+  available: boolean;
+  cooldownUntil: number;
+  failureCount: number;
+  lastError: AccountFailureKind | null;
+  lastFailureAt: string | null;
+  lastSuccessAt: string | null;
+}
+
 export interface AvailableAccount {
   token: TokenData;
   deviceId: string;
@@ -504,6 +518,18 @@ export class AccountManager {
       });
     }
     return snapshots;
+  }
+
+  getStatuses(): AccountStatus[] {
+    const now = Date.now();
+    return [...this.accounts.values()].map((acct) => ({
+      available: acct.cooldownUntil <= now,
+      cooldownUntil: acct.cooldownUntil,
+      failureCount: acct.failureCount,
+      lastError: acct.lastFailureKind,
+      lastFailureAt: acct.lastFailureAt,
+      lastSuccessAt: acct.lastSuccessAt,
+    }));
   }
 
   startAutoRefresh(): void {

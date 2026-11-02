@@ -373,3 +373,87 @@ test("daily-token-limit is refused when stats are off", () => {
     /stats/,
   );
 });
+
+test("GET /v1/status gives any valid key account health and nothing identifying", async (t) => {
+  const authDir = fs.mkdtempSync(path.join(os.tmpdir(), "auth2api-status-"));
+  t.after(() => fs.rmSync(authDir, { recursive: true, force: true }));
+  const registry = buildRegistry(authDir);
+  const token = (email: string, provider: "codex" | "anthropic") => ({
+    accessToken: "secret-access-token",
+    refreshToken: "secret-refresh-token",
+    email,
+    expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+    accountUuid: "u",
+    provider,
+    planType: "plus",
+  });
+  registry.get("codex").manager.addAccount(token("owner@example.com", "codex"));
+  registry
+    .get("anthropic")
+    .manager.addAccount(token("claude@example.com", "anthropic"));
+  const configPath = path.join(authDir, "config.yaml");
+  fs.writeFileSync(configPath, yaml.dump({ port: 1, "api-keys": entries() }));
+  const app = createServer(makeConfig(authDir), registry, undefined, {
+    persistKeys: persistApiKeys(configPath),
+  });
+  const server = app.listen(0, "127.0.0.1");
+  await new Promise<void>((r) => server.once("listening", r));
+  t.after(() => server.close());
+  const port = (server.address() as any).port;
+  const get = async (key: string | null) => {
+    const res = await fetch(`http://127.0.0.1:${port}/v1/status`, {
+      headers: key ? { authorization: `Bearer ${key}` } : {},
+    });
+    const text = await res.text();
+    return { status: res.status, text, body: text ? JSON.parse(text) : null };
+  };
+
+  assert.equal((await get(null)).status, 401);
+  assert.equal((await get("sk-nope-0123456789abcdef")).status, 403);
+
+  // A key limited to a codex model sees codex only, and needs no admin.
+  const member = await get(MARIA);
+  assert.equal(member.status, 200);
+  assert.deepEqual(Object.keys(member.body.providers), ["codex"]);
+  assert.equal(member.body.providers.codex.account_count, 1);
+  assert.deepEqual(
+    Object.keys(member.body.providers.codex.accounts[0]).sort(),
+    [
+      "available",
+      "cooldownUntil",
+      "failureCount",
+      "lastError",
+      "lastFailureAt",
+      "lastSuccessAt",
+    ],
+  );
+  assert.equal(member.body.providers.codex.accounts[0].available, true);
+  for (const secret of ["example.com", "secret-", "plus"]) {
+    assert.ok(!member.text.includes(secret), `leaked ${secret}`);
+  }
+
+  // A cooled-down account reports the failure kind, never the upstream text.
+  registry
+    .get("codex")
+    .manager.recordFailure(
+      "owner@example.com",
+      "rate_limit",
+      "usage_limit for owner@example.com",
+    );
+  const cooling = await get(MARIA);
+  const account = cooling.body.providers.codex.accounts[0];
+  assert.equal(account.available, false);
+  assert.equal(account.lastError, "rate_limit");
+  assert.equal(account.failureCount, 1);
+  assert.ok(account.cooldownUntil > Date.now());
+  assert.ok(!cooling.text.includes("owner@example.com"));
+  assert.ok(!cooling.text.includes("usage_limit"));
+
+  // An all-models key sees every provider.
+  const admin = await get(ADMIN);
+  assert.deepEqual(Object.keys(admin.body.providers).sort(), [
+    "anthropic",
+    "codex",
+    "cursor",
+  ]);
+});
