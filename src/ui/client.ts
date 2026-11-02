@@ -697,7 +697,7 @@ export const JS = String.raw`
   function modelRow(m) {
     var isGo = m.id.indexOf('go/') === 0;
     var std = m.access === 'standard';
-    var nameCell = h('div', { class: 'm-name' }, [h('strong', { text: isGo ? plainName(m.id) : m.name }), isGo ? h('span', { class: 'tags' }, [h('span', { class: 'chip', text: 'OpenCode Go' })]) : null]);
+    var nameCell = h('div', { class: 'm-name' }, [h('strong', { text: isGo ? plainName(m.id) : m.name }), isGo ? h('span', { class: 'tags' }, [h('span', { class: 'chip', text: 'OpenCode Go' })]) : null, m.kind === 'image' ? h('span', { class: 'tags' }, [h('span', { class: 'chip strong', text: 'Images' })]) : null]);
     var menu = rowMenu('Actions for ' + m.name, [
       { text: std ? 'Make on request' : 'Make standard', run: function () { setAccess(m, std ? 'on_request' : 'standard'); } },
       'sep',

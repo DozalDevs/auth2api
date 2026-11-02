@@ -9,6 +9,7 @@ const FILES: Record<string, string> = {
   "/setup/opencode.sh": "setup-opencode.sh",
   "/setup/opencode.ps1": "setup-opencode.ps1",
   "/setup/prompt.txt": "agent-prompt.txt",
+  "/setup/image-plugin.js": "image-plugin.js",
 };
 
 export function relayOrigin(req: express.Request): string | undefined {

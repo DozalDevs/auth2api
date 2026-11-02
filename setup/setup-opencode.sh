@@ -29,6 +29,7 @@ RELEASE_DATE="${RELAY_RELEASE_DATE:-$(date -u +%Y-%m-%d)}"
 STALE_DAYS=150
 
 CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json"
+PLUGIN_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/plugins/dozaldevs-images.js"
 KEY_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/opencode/dozaldevs-relay.key"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 CHECK=0
@@ -402,6 +403,23 @@ config_result="$(run_editor config "$CONFIG_FILE" "$PROVIDER_ID" "$RELAY_URL/v1"
 ok "OpenCode settings: ${config_result%% *} ($CONFIG_FILE)"
 ok "Your key: $key_result (private file $KEY_FILE)"
 case "$config_result" in *kept-model*) say "     Your existing default model was left as it was; pick the relay's models from the model menu." ;; esac
+
+# ---- 5b. Image tools for OpenCode 2 (a failure here never stops the setup) ----
+plugin_result="skipped"
+plugin_status="$(curl -sS --max-time 30 -o "$BODY_FILE" -w '%{http_code}' "$RELAY_URL/setup/image-plugin.js" 2>/dev/null || true)"
+if [ "${plugin_status:-000}" = "200" ] && grep -q 'dozaldevs.images' "$BODY_FILE"; then
+  mkdir -p "$(dirname "$PLUGIN_FILE")"
+  if [ -f "$PLUGIN_FILE" ] && cmp -s "$BODY_FILE" "$PLUGIN_FILE"; then
+    plugin_result="unchanged"
+  else
+    [ -f "$PLUGIN_FILE" ] && plugin_result="updated" || plugin_result="created"
+    cp "$BODY_FILE" "$PLUGIN_FILE.new" && mv "$PLUGIN_FILE.new" "$PLUGIN_FILE" || plugin_result="failed"
+  fi
+fi
+case "$plugin_result" in
+  skipped | failed) warn "Could not install the image tools. Everything else is set up; run the setup again later to add them." ;;
+  *) ok "Image tools: $plugin_result ($PLUGIN_FILE)" ;;
+esac
 
 # ---- 6. Tell them what to do next ----
 say ""

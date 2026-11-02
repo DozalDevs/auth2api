@@ -26,6 +26,7 @@ $Candidates = @('gpt-6-luna', 'gpt-5.6-luna', 'gpt-6-sol', 'gpt-5.6-sol', 'gpt-6
 $ConfigHome = if ($env:XDG_CONFIG_HOME) { $env:XDG_CONFIG_HOME } else { Join-Path $HOME '.config' }
 $DataHome = if ($env:XDG_DATA_HOME) { $env:XDG_DATA_HOME } else { Join-Path $HOME '.local/share' }
 $ConfigFile = Join-Path (Join-Path $ConfigHome 'opencode') 'opencode.json'
+$PluginFile = Join-Path (Join-Path (Join-Path $ConfigHome 'opencode') 'plugins') 'dozaldevs-images.js'
 $KeyFile = Join-Path (Join-Path $DataHome 'opencode') 'dozaldevs-relay.key'
 $KeyFileForJson = $KeyFile.Replace('\', '/')
 $Stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
@@ -260,6 +261,23 @@ function Main {
     Ok "OpenCode settings: $($configResult.Split(' ')[0]) ($ConfigFile)"
     Ok "Your key: $keyResult (private file $KeyFile)"
     if ($configResult -like '*kept-model*') { Say "     Your existing default model was left as it was; pick the relay's models from the model menu." }
+
+    # ---- 5b. Image tools for OpenCode 2 (a failure here never stops the setup) ----
+    $pluginResult = 'skipped'
+    try {
+        $pr = Invoke-Relay 'GET' '/setup/image-plugin.js' '' $true
+        if ($pr.Status -eq 200 -and $pr.Body -match 'dozaldevs\.images') {
+            $null = New-Item -ItemType Directory -Force -Path (Split-Path -Parent $PluginFile)
+            $existing = if (Test-Path -LiteralPath $PluginFile) { [System.IO.File]::ReadAllText($PluginFile) } else { $null }
+            if ($existing -eq $pr.Body) { $pluginResult = 'unchanged' }
+            else {
+                $pluginResult = if ($null -eq $existing) { 'created' } else { 'updated' }
+                [System.IO.File]::WriteAllText($PluginFile, $pr.Body, $Utf8NoBom)
+            }
+        }
+    } catch { $pluginResult = 'failed' }
+    if ($pluginResult -eq 'skipped' -or $pluginResult -eq 'failed') { Warn 'Could not install the image tools. Everything else is set up; run the setup again later to add them.' }
+    else { Ok "Image tools: $pluginResult ($PluginFile)" }
 
     # ---- 6. Tell them what to do next ----
     Say ''
