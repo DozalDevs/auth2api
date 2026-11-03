@@ -9,6 +9,8 @@ import {
   validateApiKeyEntry,
 } from "../config";
 import { resolveModel } from "../upstream/translator";
+import type { StatsRecorder } from "../stats/recorder";
+import { hashApiKey } from "../utils/common";
 
 /** A request the caller can fix; `status` is the HTTP status to answer with. */
 export class KeyStoreError extends Error {
@@ -144,6 +146,27 @@ export class KeyStore {
   /** Whether `entry` may call `model` now (alias-resolved on both sides). */
   allows(entry: ApiKeyEntry, model: string, at = this.now()): boolean {
     return this.baseAllows(entry, model) || !!this.loanFor(entry, model, at);
+  }
+
+  /**
+   * Whether tokens spent on `model` count toward a key's daily limit. Standard
+   * models never do: they are open to everyone, however a key got them. Anything
+   * else (on-request models, and models the list does not know) counts.
+   */
+  countsTowardLimit(model: string): boolean {
+    const want = resolveModel(model);
+    return !this.standard().some((m) => resolveModel(m) === want);
+  }
+
+  /** The tokens a key has spent today on models its daily limit counts. */
+  limitedTokensOnDay(
+    stats: { tokensOnDay: StatsRecorder["tokensOnDay"] },
+    entry: ApiKeyEntry,
+    day: string,
+  ): number {
+    return stats.tokensOnDay(hashApiKey(entry.key), day, (m) =>
+      this.countsTowardLimit(m),
+    );
   }
 
   private standard(): string[] {

@@ -152,18 +152,19 @@ export const ACCOUNT_JS = String.raw`
     if (me.tokens_today === null) { box.hidden = true; return; }
     box.hidden = false;
     var limit = me.daily_token_limit;
+    var counted = me.capped_tokens_today === null || me.capped_tokens_today === undefined ? me.tokens_today : me.capped_tokens_today;
     var sec = h('div', { class: 'section' }, [h('h2', { text: 'Your usage' })]);
     var line = limit
-      ? h('p', { class: 'num', title: full(me.tokens_today) + ' of ' + full(limit) + ' tokens today' }, [h('span', { class: 'big', text: short(me.tokens_today) }), ' of ' + short(limit) + ' tokens used today'])
+      ? h('p', { class: 'num', title: full(counted) + ' of ' + full(limit) + ' tokens today on on-request models' }, [h('span', { class: 'big', text: short(counted) }), ' of ' + short(limit) + ' on-request tokens used today (standard models are not counted)'])
       : h('p', { class: 'num', title: full(me.tokens_today) + ' tokens today' }, [h('span', { class: 'big', text: short(me.tokens_today) }), ' tokens used today, no daily limit']);
     sec.appendChild(line);
     if (limit) {
-      var pct = Math.min(100, Math.round(me.tokens_today / limit * 100));
-      var level = me.tokens_today >= limit ? 'over' : pct >= 80 ? 'near' : '';
+      var pct = Math.min(100, Math.round(counted / limit * 100));
+      var level = counted >= limit ? 'over' : pct >= 80 ? 'near' : '';
       var meter = h('div', { class: 'meter ' + level, role: 'img', 'aria-label': pct + ' percent of your daily limit used' }, [h('span')]);
       meter.firstChild.style.width = pct + '%';
       sec.appendChild(meter);
-      if (level === 'over') sec.appendChild(h('p', { class: 'err small', text: 'You have reached your daily limit. It starts again at midnight UTC.' }));
+      if (level === 'over') sec.appendChild(h('p', { class: 'err small', text: 'You have reached your daily limit on on-request models. It starts again at midnight UTC. Standard models still work.' }));
       else if (level === 'near') sec.appendChild(h('p', { class: 'small', text: 'You are close to your daily limit.' }));
     }
     box.appendChild(sec);

@@ -35,6 +35,9 @@ function describe(
   const used = stats
     ? stats.tokensOnDay(hashApiKey(entry.key), utcDay())
     : null;
+  const counted = stats
+    ? store.limitedTokensOnDay(stats, entry, utcDay())
+    : null;
   return {
     name: entry.name,
     models: entry.models,
@@ -45,6 +48,7 @@ function describe(
       .endedGrants(entry, at)
       .map((g) => describeGrant(g, at, true)),
     daily_token_limit: limit,
+    capped_tokens_today: counted,
     disabled: entry.disabled === true,
     admin: entry.admin === true,
     key_suffix: entry.key.slice(-4),

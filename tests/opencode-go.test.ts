@@ -637,23 +637,37 @@ test("a temporary grant opens an on-request Go model, then it closes on its own"
   assert.equal(gone.body.error.code, "grant_expired");
 });
 
-test("the daily token cap counts Go usage like any other model", async (t) => {
+test("the daily limit counts Go usage on on-request models and leaves standard Go models alone", async (t) => {
   const go = await startFakeOpenCodeGo();
   t.after(() => go.close());
-  const { chat } = await startApp(t, go, { limit: 20 });
+  const { call, chat } = await startApp(t, go, { limit: 20 });
   assert.equal(
-    (await chat(STD, "go/glm-5.3-flash")).status,
-    200,
-    "16 tokens used",
+    (
+      await call("POST", "/admin/keys/std/grants", ADMIN, {
+        models: ["go/kimi-k3"],
+        hours: 2,
+      })
+    ).status,
+    201,
   );
   assert.equal(
-    (await chat(STD, "go/glm-5.3-flash")).status,
+    (await chat(STD, "go/kimi-k3")).status,
+    200,
+    "16 tokens counted",
+  );
+  assert.equal(
+    (await chat(STD, "go/kimi-k3")).status,
     200,
     "32 now, call already allowed through",
   );
-  const over = await chat(STD, "go/glm-5.3-flash");
+  const over = await chat(STD, "go/kimi-k3");
   assert.equal(over.status, 429);
   assert.equal(over.body.error.type, "daily_token_limit");
+  assert.equal(
+    (await chat(STD, "go/glm-5.3-flash")).status,
+    200,
+    "a standard Go model is not stopped by the limit",
+  );
 });
 
 test("/setup/models lists standard Go models as usable and on-request ones labelled", async (t) => {

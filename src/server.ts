@@ -610,14 +610,18 @@ export function createServer(
       }
     }
     const limit = entry["daily-token-limit"];
+    // The limit guards the models it counts (everything but standard models), so
+    // a key that has used up its limit can still use every standard model.
     if (
       limit !== undefined &&
       statsRecorder &&
-      statsRecorder.tokensOnDay(hashApiKey(entry.key), utcDay()) >= limit
+      (typeof model !== "string" || keyStore.countsTowardLimit(model)) &&
+      keyStore.limitedTokensOnDay(statsRecorder, entry, utcDay()) >= limit
     ) {
       res.status(429).json({
         error: {
-          message: "daily token limit reached for this key",
+          message:
+            "daily token limit reached for this key's on-request models. Standard models are not affected.",
           type: "daily_token_limit",
         },
       });
