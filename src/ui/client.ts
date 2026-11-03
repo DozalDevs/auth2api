@@ -364,9 +364,11 @@ export const JS = String.raw`
     if (state.statsOff || used === null) return cell;
     var limit = k.daily_token_limit;
     if (limit) {
+      used = k.capped_tokens_today === null || k.capped_tokens_today === undefined ? used : k.capped_tokens_today;
       var pct = Math.min(100, Math.round(used / limit * 100));
       var level = used >= limit ? 'over' : pct >= 80 ? 'near' : '';
-      cell.appendChild(h('div', { class: 'line num', title: full(used) + ' of ' + full(limit) + ' tokens today', text: short(used) + ' of ' + short(limit) + ' tokens' }));
+      cell.appendChild(h('div', { class: 'line num', title: full(used) + ' of ' + full(limit) + ' tokens today on models that are not standard. Standard models never count.', text: short(used) + ' of ' + short(limit) + ' tokens' }));
+      cell.appendChild(h('div', { class: 'muted small', text: 'Counts on-request models only' }));
       if (level === 'over') cell.appendChild(h('div', { class: 'over', text: 'Daily limit reached' }));
       else if (level === 'near') cell.appendChild(h('div', { class: 'near', text: 'Close to its daily limit' }));
       var bar = h('div', { class: 'meter ' + level, role: 'img', 'aria-label': pct + ' percent of the daily limit used' }, [h('span')]);

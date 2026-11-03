@@ -188,11 +188,22 @@ export class StatsRecorder {
     };
   }
 
-  /** Input + output tokens one key has used on a UTC day (YYYY-MM-DD). */
-  tokensOnDay(apiKeyHash: string, day: string): number {
+  /**
+   * Input + output tokens one key has used on a UTC day (YYYY-MM-DD).
+   * `count` limits the sum to the models it accepts (all models when omitted).
+   */
+  tokensOnDay(
+    apiKeyHash: string,
+    day: string,
+    count?: (model: string) => boolean,
+  ): number {
     let total = 0;
     for (const row of this.byKeyModelDay.values()) {
-      if (row.apiKeyHash === apiKeyHash && row.day === day) {
+      if (
+        row.apiKeyHash === apiKeyHash &&
+        row.day === day &&
+        (!count || count(row.model))
+      ) {
         total += row.inputTokens + row.outputTokens;
       }
     }

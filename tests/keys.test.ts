@@ -22,7 +22,7 @@ function entries(): ApiKeyEntry[] {
     {
       name: "maria",
       key: MARIA,
-      models: ["gpt-6-luna"],
+      models: ["gpt-6-luna", "gpt-6-sol"],
       "daily-token-limit": 1000,
     },
     { name: "bob", key: BOB, models: ["gpt-6-luna"] },
@@ -35,6 +35,10 @@ function makeConfig(authDir: string): Config {
     port: 0,
     "auth-dir": authDir,
     "api-keys": entries(),
+    models: [
+      { id: "gpt-6-luna", name: "GPT-6 Luna", access: "standard" },
+      { id: "gpt-6-sol", name: "GPT-6 Sol", access: "on_request" },
+    ],
     "body-limit": "1mb",
     cloaking: {},
     timeouts: {
@@ -170,27 +174,56 @@ test("an alias cannot sneak past an allowlist that names the real model", async 
   assert.equal(other.body.error.type, "model_not_allowed");
 });
 
-test("the daily token cap stops only the key that hit it", async (t) => {
+test("the daily limit guards on-request models only: standard models keep working past it", async (t) => {
   const { call, recorder } = await startApp(t);
-  recordUsage(recorder, MARIA, "gpt-6-luna", 600, 300);
+  // Heavy standard use never counts, however much of it there is.
+  recordUsage(recorder, MARIA, "gpt-6-luna", 900_000, 100_000);
+  const luna = await call(
+    "POST",
+    "/v1/chat/completions",
+    MARIA,
+    chat("gpt-6-luna"),
+  );
+  assert.notEqual(luna.status, 429);
+  const sol = await call(
+    "POST",
+    "/v1/chat/completions",
+    MARIA,
+    chat("gpt-6-sol"),
+  );
+  assert.notEqual(sol.status, 429, "Luna's tokens did not use up Sol's limit");
+
+  recordUsage(recorder, MARIA, "gpt-6-sol", 600, 300);
   const under = await call(
     "POST",
     "/v1/chat/completions",
     MARIA,
-    chat("gpt-6-luna"),
+    chat("gpt-6-sol"),
   );
   assert.notEqual(under.status, 429);
 
-  recordUsage(recorder, MARIA, "gpt-6-luna", 100, 100);
+  recordUsage(recorder, MARIA, "gpt-6-sol", 100, 100);
   const over = await call(
+    "POST",
+    "/v1/chat/completions",
+    MARIA,
+    chat("gpt-6-sol"),
+  );
+  assert.equal(over.status, 429);
+  assert.equal(over.body.error.type, "daily_token_limit");
+  assert.match(over.body.error.message, /on-request models/);
+
+  const stillLuna = await call(
     "POST",
     "/v1/chat/completions",
     MARIA,
     chat("gpt-6-luna"),
   );
-  assert.equal(over.status, 429);
-  assert.equal(over.body.error.type, "daily_token_limit");
-
+  assert.notEqual(
+    stillLuna.status,
+    429,
+    "past the limit, the standard model still works",
+  );
   const other = await call(
     "POST",
     "/v1/chat/completions",
@@ -199,6 +232,12 @@ test("the daily token cap stops only the key that hit it", async (t) => {
   );
   assert.notEqual(other.status, 429);
   assert.equal((await call("GET", "/v1/models", MARIA)).status, 200);
+
+  const row = (await call("GET", "/admin/keys", ADMIN)).body.keys.find(
+    (k: any) => k.name === "maria",
+  );
+  assert.equal(row.capped_tokens_today, 1100, "only Sol's tokens count");
+  assert.equal(row.tokens_today, 1_001_100, "the total is still reported");
 });
 
 test("usage from a previous UTC day does not count toward today's cap", async (t) => {

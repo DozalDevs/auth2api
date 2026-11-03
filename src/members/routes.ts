@@ -403,6 +403,7 @@ export function registerAccountRoutes(
         days: Array<{ day: string; tokens: number; requests: number }>;
       } | null = null;
       let tokensToday: number | null = null;
+      let cappedToday: number | null = null;
       if (deps.stats) {
         const hash = hashApiKey(entry.key);
         const since = utcDay(at - (USAGE_DAYS - 1) * 86_400_000);
@@ -421,6 +422,11 @@ export function registerAccountRoutes(
           days: [...byDay.values()].sort((a, b) => b.day.localeCompare(a.day)),
         };
         tokensToday = deps.stats.tokensOnDay(hash, utcDay(at));
+        cappedToday = deps.keys.limitedTokensOnDay(
+          deps.stats,
+          entry,
+          utcDay(at),
+        );
       }
 
       res.json({
@@ -433,6 +439,7 @@ export function registerAccountRoutes(
         models,
         daily_token_limit: limit,
         tokens_today: tokensToday,
+        capped_tokens_today: cappedToday,
         usage,
         requests: deps.requests
           .list({ key: entry.name })
