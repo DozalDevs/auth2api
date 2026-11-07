@@ -656,7 +656,9 @@ export function createServer(
 
   // GET /v1/status — account health for the providers this key can reach, for
   // callers deciding whether to send a call now. Any valid key may read it, so it
-  // carries health only: no emails, plans, tokens, usage or other keys' data.
+  // carries health only: no emails, plans, tokens, token counts or other keys'
+  // data. The one addition is each codex account's usage percent and reset time
+  // (null when unknown), which callers need to decide when to stop sending.
   // /admin/accounts stays the operator's full view.
   app.get("/v1/status", (_req, res) => {
     const entry = res.locals.keyEntry as ApiKeyEntry;
