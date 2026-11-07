@@ -2,6 +2,7 @@ import { ProviderId, TokenData } from "../auth/types";
 import { saveToken, loadAllTokens } from "../auth/token-storage";
 import { getDeviceId } from "../utils/common";
 import { RefreshTokenExhaustedError } from "../auth/refresh-errors";
+import type { CodexUsage } from "../upstream/codex-usage";
 
 // Reauth-required cooldown: long enough that the account doesn't keep
 // hitting the upstream, but bounded so a re-login auto-recovers next sweep.
@@ -43,6 +44,43 @@ const FAILURE_BACKOFF: Record<
   server: { baseMs: 5 * 1000, maxMs: 5 * 60 * 1000 },
   network: { baseMs: 5 * 1000, maxMs: 5 * 60 * 1000 },
 };
+
+/**
+ * Weekly / 5-hour usage readings for an account; every field is null when the
+ * reading is unknown (not fetched yet, fetch failing, stale, or window over).
+ */
+export interface UsageReading {
+  /** 0-100 share of the ~7-day window used. */
+  weeklyUsedPercent: number | null;
+  /** ISO 8601 time the weekly window resets. */
+  weeklyResetsAt: string | null;
+  fiveHourUsedPercent: number | null;
+  fiveHourResetsAt: string | null;
+  /** ISO 8601 time the reading was taken upstream. */
+  usageFetchedAt: string | null;
+}
+
+export interface UsageTrackingOptions {
+  fetch: (account: AvailableAccount) => Promise<CodexUsage>;
+  /** At most one upstream call per account per this long (more after failures). */
+  minIntervalMs: number;
+  now?: () => number;
+}
+
+interface UsageState {
+  value: CodexUsage | null;
+  fetchedAt: number;
+  /** Earliest time the next fetch may start. */
+  nextAttemptAt: number;
+  failures: number;
+  inFlight: boolean;
+}
+
+// A reading older than this many intervals is shown as unknown rather than
+// as a number that may have drifted a long way.
+const USAGE_STALE_INTERVALS = 6;
+// The wait doubles with each consecutive failure (1x, 2x, 4x, 8x), then holds.
+const USAGE_MAX_BACKOFF_FACTOR = 8;
 
 export interface UsageData {
   inputTokens: number;
@@ -100,9 +138,10 @@ interface AccountState {
   totalCacheReadInputTokens: number;
   totalReasoningOutputTokens: number;
   refreshPromise: Promise<boolean> | null;
+  usage: UsageState;
 }
 
-export interface AccountSnapshot {
+export interface AccountSnapshot extends UsageReading {
   email: string;
   available: boolean;
   cooldownUntil: number;
@@ -130,7 +169,7 @@ export interface AccountSnapshot {
  * token, usage or any text an upstream wrote. `lastError` is the failure kind
  * (rate_limit, auth, forbidden, server, network), never the message.
  */
-export interface AccountStatus {
+export interface AccountStatus extends UsageReading {
   available: boolean;
   cooldownUntil: number;
   failureCount: number;
@@ -218,6 +257,7 @@ export class AccountManager {
   private refreshFn: RefreshFn;
   private refreshPolicy: RefreshPolicy;
   private reloadPromise: Promise<ReloadStats> | null = null;
+  private usageTracking: UsageTrackingOptions | null = null;
 
   constructor(authDir: string, opts: AccountManagerOptions) {
     this.authDir = authDir;
@@ -491,11 +531,108 @@ export class AccountManager {
     return acct.refreshPromise;
   }
 
+  /**
+   * Turn on cached usage readings. Reads of getSnapshots()/getStatuses() then
+   * kick off at most one background fetch per account per interval and always
+   * return at once with whatever is cached; a fetch failure leaves the fields
+   * null and never touches the account's health or the request path.
+   */
+  enableUsageTracking(opts: UsageTrackingOptions): void {
+    this.usageTracking = opts;
+  }
+
+  private usageReading(acct: AccountState): UsageReading {
+    const opts = this.usageTracking;
+    const none: UsageReading = {
+      weeklyUsedPercent: null,
+      weeklyResetsAt: null,
+      fiveHourUsedPercent: null,
+      fiveHourResetsAt: null,
+      usageFetchedAt: null,
+    };
+    if (!opts) return none;
+    this.maybeFetchUsage(acct, opts);
+    const { value, fetchedAt } = acct.usage;
+    const now = (opts.now ?? Date.now)();
+    if (
+      !value ||
+      now - fetchedAt > USAGE_STALE_INTERVALS * opts.minIntervalMs
+    ) {
+      return none;
+    }
+    // A window that has already reset says nothing about the new one.
+    const live = (w: CodexUsage["weekly"]) =>
+      w && Date.parse(w.resetsAt) > now ? w : null;
+    const weekly = live(value.weekly);
+    const fiveHour = live(value.fiveHour);
+    return {
+      weeklyUsedPercent: weekly?.usedPercent ?? null,
+      weeklyResetsAt: weekly?.resetsAt ?? null,
+      fiveHourUsedPercent: fiveHour?.usedPercent ?? null,
+      fiveHourResetsAt: fiveHour?.resetsAt ?? null,
+      usageFetchedAt: new Date(fetchedAt).toISOString(),
+    };
+  }
+
+  private maybeFetchUsage(
+    acct: AccountState,
+    opts: UsageTrackingOptions,
+  ): void {
+    const u = acct.usage;
+    const now = (opts.now ?? Date.now)();
+    if (u.inFlight || now < u.nextAttemptAt) return;
+    // Don't send a token we already know is rejected to yet another endpoint.
+    if (
+      acct.cooldownUntil > Date.now() &&
+      (acct.lastFailureKind === "auth" || acct.lastFailureKind === "forbidden")
+    ) {
+      return;
+    }
+    u.inFlight = true;
+    u.nextAttemptAt = now + opts.minIntervalMs;
+    const account = buildAvailableAccount(
+      this.authDir,
+      acct.token.email,
+      acct.token,
+      this.provider,
+    );
+    let pending: Promise<CodexUsage>;
+    try {
+      pending = Promise.resolve(opts.fetch(account));
+    } catch (err) {
+      pending = Promise.reject(err);
+    }
+    pending
+      .then(
+        (value) => {
+          u.value = value;
+          u.fetchedAt = (opts.now ?? Date.now)();
+          u.failures = 0;
+        },
+        (err: any) => {
+          u.failures++;
+          const factor = Math.min(
+            2 ** (u.failures - 1),
+            USAGE_MAX_BACKOFF_FACTOR,
+          );
+          u.nextAttemptAt =
+            (opts.now ?? Date.now)() + opts.minIntervalMs * factor;
+          console.error(
+            `[${this.provider}] usage fetch failed for ${acct.token.email}: ${err?.message ?? err}`,
+          );
+        },
+      )
+      .finally(() => {
+        u.inFlight = false;
+      });
+  }
+
   getSnapshots(): AccountSnapshot[] {
     const now = Date.now();
     const snapshots: AccountSnapshot[] = [];
     for (const acct of this.accounts.values()) {
       snapshots.push({
+        ...this.usageReading(acct),
         email: acct.token.email,
         available: acct.cooldownUntil <= now,
         cooldownUntil: acct.cooldownUntil,
@@ -529,6 +666,7 @@ export class AccountManager {
       lastError: acct.lastFailureKind,
       lastFailureAt: acct.lastFailureAt,
       lastSuccessAt: acct.lastSuccessAt,
+      ...this.usageReading(acct),
     }));
   }
 
@@ -708,6 +846,13 @@ export class AccountManager {
       totalCacheReadInputTokens: 0,
       totalReasoningOutputTokens: 0,
       refreshPromise: null,
+      usage: {
+        value: null,
+        fetchedAt: 0,
+        nextAttemptAt: 0,
+        failures: 0,
+        inFlight: false,
+      },
     };
   }
 }

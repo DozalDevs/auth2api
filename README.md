@@ -237,8 +237,8 @@ The decoder routes Cursor's chain-of-thought (`reasoning`) bytes to `response.re
 | `POST /v1/messages`              | Claude native passthrough                                             |
 | `POST /v1/messages/count_tokens` | Claude token counting                                                 |
 | `GET /v1/models`                 | List available models                                                 |
-| `GET /v1/status`                 | Account health only (no emails/usage), any valid key can read it      |
-| `GET /admin/accounts`            | Account health/status (API key required)                              |
+| `GET /v1/status`                 | Account health + Codex weekly/5h usage % (no emails), any valid key   |
+| `GET /admin/accounts`            | Account health/status + Codex weekly/5h usage (API key required)      |
 | `GET /admin/stats`               | Per-client / per-account / per-API call statistics (API key required) |
 | `POST /admin/reload`             | Reload tokens from disk (API key required)                            |
 | `GET /health`                    | Health check                                                          |

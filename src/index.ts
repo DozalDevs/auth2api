@@ -22,6 +22,10 @@ import { buildRegistry, ProviderRegistry } from "./providers/registry";
 import { createServer } from "./server";
 import { notifyServerReload } from "./utils/notify-reload";
 import { StatsRecorder } from "./stats/recorder";
+import {
+  CODEX_USAGE_MIN_INTERVAL_MS,
+  fetchCodexUsage,
+} from "./upstream/codex-usage";
 
 function prompt(question: string): Promise<string> {
   const rl = readline.createInterface({
@@ -177,6 +181,12 @@ async function startServer(): Promise<void> {
   for (const p of registry.all()) {
     if (p.manager.accountCount > 0) {
       p.manager.startAutoRefresh();
+      if (p.id === "codex") {
+        p.manager.enableUsageTracking({
+          fetch: (account) => fetchCodexUsage(account),
+          minIntervalMs: CODEX_USAGE_MIN_INTERVAL_MS,
+        });
+      }
       p.manager.startStatsLogger();
     }
   }
