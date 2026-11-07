@@ -2,6 +2,8 @@ import { ProviderId, TokenData } from "../auth/types";
 import { saveToken, loadAllTokens } from "../auth/token-storage";
 import { getDeviceId } from "../utils/common";
 import { RefreshTokenExhaustedError } from "../auth/refresh-errors";
+import type { CodexUsage } from "../upstream/codex-usage";
+import { UNKNOWN_CODEX_USAGE } from "../upstream/codex-usage";
 
 // Reauth-required cooldown: long enough that the account doesn't keep
 // hitting the upstream, but bounded so a re-login auto-recovers next sweep.
@@ -99,10 +101,13 @@ interface AccountState {
   totalCacheCreationInputTokens: number;
   totalCacheReadInputTokens: number;
   totalReasoningOutputTokens: number;
+  /** Codex only. Null until the first read, or when the last read failed. */
+  usage: CodexUsage | null;
+  usageCheckedAt: string | null;
   refreshPromise: Promise<boolean> | null;
 }
 
-export interface AccountSnapshot {
+export interface AccountSnapshot extends Partial<AccountUsageFields> {
   email: string;
   available: boolean;
   cooldownUntil: number;
@@ -126,11 +131,20 @@ export interface AccountSnapshot {
 }
 
 /**
+ * Codex only. The account's own usage windows; every field is null when the
+ * upstream read has not succeeded yet or the last one failed (unknown, not zero).
+ * usageCheckedAt is when the relay last tried, whatever the outcome.
+ */
+export interface AccountUsageFields extends CodexUsage {
+  usageCheckedAt: string | null;
+}
+
+/**
  * What a non-admin key may see about an account: health only. No email, plan,
  * token, usage or any text an upstream wrote. `lastError` is the failure kind
  * (rate_limit, auth, forbidden, server, network), never the message.
  */
-export interface AccountStatus {
+export interface AccountStatus extends Partial<AccountUsageFields> {
   available: boolean;
   cooldownUntil: number;
   failureCount: number;
@@ -515,6 +529,7 @@ export class AccountManager {
         expiresAt: acct.token.expiresAt,
         refreshing: acct.refreshPromise !== null,
         planType: acct.token.planType,
+        ...this.usageFields(acct),
       });
     }
     return snapshots;
@@ -529,7 +544,36 @@ export class AccountManager {
       lastError: acct.lastFailureKind,
       lastFailureAt: acct.lastFailureAt,
       lastSuccessAt: acct.lastSuccessAt,
+      ...this.usageFields(acct),
     }));
+  }
+
+  /** Accounts as the upstream sees them, for background reads that need a token. */
+  listAccounts(): AvailableAccount[] {
+    return [...this.accounts.values()].map((acct) =>
+      buildAvailableAccount(
+        this.authDir,
+        acct.token.email,
+        acct.token,
+        this.provider,
+      ),
+    );
+  }
+
+  /** Store the result of a usage read; null means it failed or was not understood. */
+  setUsage(email: string, usage: CodexUsage | null, checkedAt: string): void {
+    const acct = this.accounts.get(email);
+    if (!acct) return;
+    acct.usage = usage;
+    acct.usageCheckedAt = checkedAt;
+  }
+
+  private usageFields(acct: AccountState): Partial<AccountUsageFields> {
+    if (this.provider !== "codex") return {};
+    return {
+      ...(acct.usage ?? UNKNOWN_CODEX_USAGE),
+      usageCheckedAt: acct.usageCheckedAt,
+    };
   }
 
   startAutoRefresh(): void {
@@ -707,6 +751,8 @@ export class AccountManager {
       totalCacheCreationInputTokens: 0,
       totalCacheReadInputTokens: 0,
       totalReasoningOutputTokens: 0,
+      usage: null,
+      usageCheckedAt: null,
       refreshPromise: null,
     };
   }

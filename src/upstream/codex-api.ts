@@ -37,6 +37,23 @@ function buildUserAgent(config: Config): string {
   return `${originator}/${version} (${platform}; ${arch})`;
 }
 
+/**
+ * The account-usage read the official CLI makes for its status view:
+ * GET {chatgpt base}/wham/usage with the account's bearer token and
+ * chatgpt-account-id (codex-rs/backend-client/src/client/rate_limit_resets.rs
+ * `rate_limit_status_url` + `get_rate_limit_status`; headers from
+ * codex-rs/model-provider/src/bearer_auth_provider.rs). Sent with the same
+ * identity headers as this relay's own codex calls.
+ */
+export function buildCodexUsageRequest(
+  account: AvailableAccount,
+  config: Config,
+): { url: string; headers: Record<string, string> } {
+  const headers = buildHeaders(account, false, config);
+  delete headers["Content-Type"];
+  return { url: `${BASE_URL}/wham/usage`, headers };
+}
+
 /** @internal — exported for unit tests; do not use from app code. */
 export function __buildCodexHeaders(
   account: AvailableAccount,

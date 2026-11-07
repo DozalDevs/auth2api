@@ -22,6 +22,7 @@ import { buildRegistry, ProviderRegistry } from "./providers/registry";
 import { createServer } from "./server";
 import { notifyServerReload } from "./utils/notify-reload";
 import { StatsRecorder } from "./stats/recorder";
+import { CodexUsageMonitor } from "./upstream/codex-usage";
 
 function prompt(question: string): Promise<string> {
   const rl = readline.createInterface({
@@ -178,6 +179,11 @@ async function startServer(): Promise<void> {
     if (p.manager.accountCount > 0) {
       p.manager.startAutoRefresh();
       p.manager.startStatsLogger();
+      if (p.id === "codex") {
+        // Reads each account's weekly / 5h usage in the background; never on
+        // the request path.
+        new CodexUsageMonitor({ manager: p.manager, config }).start();
+      }
     }
   }
 

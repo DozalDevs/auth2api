@@ -461,9 +461,14 @@ test("GET /v1/status gives any valid key account health and nothing identifying"
       "available",
       "cooldownUntil",
       "failureCount",
+      "fiveHourResetsAt",
+      "fiveHourUsedPercent",
       "lastError",
       "lastFailureAt",
       "lastSuccessAt",
+      "usageCheckedAt",
+      "weeklyResetsAt",
+      "weeklyUsedPercent",
     ],
   );
   assert.equal(member.body.providers.codex.accounts[0].available, true);
