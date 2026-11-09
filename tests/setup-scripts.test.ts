@@ -256,6 +256,11 @@ for (const r of runners) {
     assert.match(res.out, /Listed as "on request".*claude-opus-5-5/);
     assert.equal(p.models["gpt-6-luna"].name, "GPT-6 Luna");
     assert.equal(p.models["gpt-5.6-luna"].name, "GPT-5.6 Luna");
+    assert.deepEqual(
+      cfg.mcp?.dozaldevs,
+      { type: "remote", url: "https://app.dozaldevs.com/mcp", enabled: true },
+      "DozalDevs is connected too; OpenCode signs in to it on first use",
+    );
     assert.equal(
       raw.toString("utf-8").includes(KEYS.luna),
       false,

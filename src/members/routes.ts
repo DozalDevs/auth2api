@@ -1,5 +1,11 @@
 import express from "express";
-import { AccessRequest, ApiKeyEntry, Member } from "../config";
+import {
+  AccessRequest,
+  ApiKeyEntry,
+  EMAIL_RE,
+  Member,
+  STANDARD_GROUP,
+} from "../config";
 import {
   LoginThrottle,
   SESSION_TTL_MS,
@@ -45,7 +51,13 @@ function handle(fn: express.RequestHandler): express.RequestHandler {
 export interface MemberAdminDeps {
   keys: KeyStore;
   members: MemberStore;
+  setupCodes: SetupCodeStore;
   publicUrl?: string;
+}
+
+/** The key a teammate gets when their first setup code is minted for them by email. */
+export function staffKeyName(email: string): string {
+  return `staff-${email.replace("@", "-")}`.slice(0, 63);
 }
 
 export function registerMemberAdminRoutes(
@@ -54,6 +66,45 @@ export function registerMemberAdminRoutes(
 ): void {
   const who = (res: express.Response): string =>
     (res.locals.keyEntry as ApiKeyEntry | undefined)?.name ?? "an admin";
+
+  // DozalDevs' own "Set up this computer" page calls this with the signed-in teammate's email, so
+  // the one-line setup works without the person ever seeing or pasting a key. The teammate's key is
+  // the one their relay sign-in belongs to, or else the one made for this email the first time,
+  // with the standard models.
+  app.post(
+    "/admin/setup-codes",
+    handle((req, res) => {
+      const raw = req.body?.email;
+      if (typeof raw !== "string" || !EMAIL_RE.test(raw.trim())) {
+        throw new KeyStoreError(
+          400,
+          "email must be the teammate's email address",
+        );
+      }
+      const email = raw.trim().toLowerCase();
+      const linked = deps.members.byEmail(email)?.key;
+      const name = linked ?? staffKeyName(email);
+      let entry = deps.keys.get(name);
+      let created = false;
+      if (!entry) {
+        entry = deps.keys.create({ name, models: [STANDARD_GROUP] });
+        created = true;
+        console.log(
+          `[account] made key "${name}" for ${email} (by ${who(res)})`,
+        );
+      }
+      if (entry.disabled) {
+        throw new KeyStoreError(403, `${name} is switched off`);
+      }
+      const minted = deps.setupCodes.mint(entry.name);
+      res.status(201).json({
+        code: minted.code,
+        expires_at: minted.expiresAt,
+        key_name: entry.name,
+        created,
+      });
+    }),
+  );
 
   app.post(
     "/admin/keys/:name/invite",

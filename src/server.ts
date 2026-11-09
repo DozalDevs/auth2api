@@ -479,7 +479,12 @@ export function createServer(
   app.use("/admin", statsFinishMiddleware);
   app.use("/admin", requireAdmin);
   registerKeyRoutes(app, keyStore, statsRecorder, catalog, members);
-  registerMemberAdminRoutes(app, { keys: keyStore, members, publicUrl });
+  registerMemberAdminRoutes(app, {
+    keys: keyStore,
+    members,
+    setupCodes,
+    publicUrl,
+  });
   registerTeamRoutes(app, { admins, publicUrl });
   registerGoAdminRoutes(app, config, goPool, catalog);
   registerRequestAdminRoutes(app, accessRequests, keyStore);
