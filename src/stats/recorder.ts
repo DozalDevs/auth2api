@@ -1,6 +1,33 @@
 import { ProviderId, StatsProviderId } from "../auth/types";
 import { UsageData } from "../accounts/manager";
-import { StatsAppender, replayStatsEvents, statsFilePath } from "./storage";
+import fs from "fs";
+import {
+  StatsAppender,
+  listRotatedGenerations,
+  replayStatsEvents,
+  rotatedStatsPath,
+  statsFilePath,
+  statsSummaryPath,
+  writeFileAtomic,
+} from "./storage";
+
+/**
+ * Events appended between compactions. At ~70k requests a day this bounds the
+ * log to well under a day's worth (~25 MB); the summary holds the rest.
+ */
+const DEFAULT_COMPACT_EVERY = 50_000;
+
+/** The compacted totals on disk: every view, as of the generation it closes. */
+interface StatsSummaryFile {
+  v: 1;
+  gen: number;
+  savedAt: string;
+  byClient: Record<string, ClientBucket>;
+  byAccount: Record<string, AccountBucket>;
+  byApi: Record<string, ApiBucket>;
+  byKeyModelDay: Record<string, UsageRow>;
+  totals: BaseBucket;
+}
 
 /**
  * One row in the JSONL stats log. Keep field names short — the file grows
@@ -126,15 +153,41 @@ export class StatsRecorder {
 
   private appender: StatsAppender | null = null;
   private enabled = false;
+  private authDir: string | null = null;
+  private gen = 0;
+  private sinceCompact = 0;
+  private readonly compactEvery: number;
+  private pendingClose: Promise<void> = Promise.resolve();
+
+  constructor(options: { compactEvery?: number } = {}) {
+    this.compactEvery = options.compactEvery ?? DEFAULT_COMPACT_EVERY;
+  }
 
   /**
-   * Replay JSONL into the in-memory aggregate, then open the append
-   * stream. Replay errors are non-fatal — operators can always delete
-   * the file to reset, and we'd rather start fresh than fail to boot.
+   * Rebuild the in-memory aggregate from the summary plus the events logged
+   * since it, compact, then open the append stream. Errors are non-fatal —
+   * operators can always delete the files to reset, and we'd rather start
+   * fresh than fail to boot.
+   *
+   * Files in `authDir`: `stats.summary.json` (totals through generation G),
+   * `stats.jsonl` (events after it) and, only after a crash mid-compaction,
+   * `stats.<n>.jsonl`. A rotated log with n > G was never summarised and is
+   * replayed; one with n <= G is already in the summary and is deleted.
    */
   start(authDir: string): void {
+    this.authDir = authDir;
     const filePath = statsFilePath(authDir);
     try {
+      this.loadSummary(authDir);
+      for (const g of listRotatedGenerations(authDir)) {
+        const rotated = rotatedStatsPath(authDir, g);
+        if (g > this.gen) {
+          replayStatsEvents(rotated, (ev) => this.applyEvent(ev));
+          this.gen = g;
+          this.writeSummary(authDir);
+        }
+        fs.rmSync(rotated, { force: true });
+      }
       const result = replayStatsEvents(filePath, (ev) => this.applyEvent(ev));
       if (result.lines > 0) {
         console.log(
@@ -144,9 +197,8 @@ export class StatsRecorder {
     } catch (err: any) {
       console.error("[stats] replay failed:", err?.message);
     }
-    this.appender = new StatsAppender(filePath);
-    this.appender.open();
     this.enabled = true;
+    this.compact();
   }
 
   async stop(): Promise<void> {
@@ -155,6 +207,77 @@ export class StatsRecorder {
       await this.appender.close();
       this.appender = null;
     }
+    await this.pendingClose;
+  }
+
+  /**
+   * Fold the current log into the summary and start an empty one, so the log
+   * never grows past `compactEvery` events. Synchronous from the rotation to
+   * the new summary, so no event can land between them; a crash anywhere
+   * leaves files that start() resolves without losing or doubling an event.
+   */
+  compact(): void {
+    if (!this.authDir) return;
+    const authDir = this.authDir;
+    const filePath = statsFilePath(authDir);
+    try {
+      const next = this.gen + 1;
+      const rotated = rotatedStatsPath(authDir, next);
+      if (fs.existsSync(filePath)) fs.renameSync(filePath, rotated);
+      this.gen = next;
+      this.writeSummary(authDir);
+      const old = this.appender;
+      this.appender = new StatsAppender(filePath);
+      this.appender.open();
+      this.sinceCompact = 0;
+      // The old stream may still flush already-summarised events into the rotated file.
+      this.pendingClose = this.pendingClose
+        .then(() => old?.close())
+        .then(() => fs.rmSync(rotated, { force: true }));
+    } catch (err: any) {
+      console.error("[stats] compaction failed:", err?.message);
+      if (!this.appender) {
+        this.appender = new StatsAppender(filePath);
+        this.appender.open();
+      }
+    }
+  }
+
+  private loadSummary(authDir: string): void {
+    const p = statsSummaryPath(authDir);
+    if (!fs.existsSync(p)) return;
+    const s = JSON.parse(fs.readFileSync(p, "utf-8")) as StatsSummaryFile;
+    if (s.v !== 1) return;
+    this.gen = s.gen;
+    this.byClient = new Map(Object.entries(s.byClient));
+    this.byAccount = new Map(Object.entries(s.byAccount));
+    this.byApi = new Map(Object.entries(s.byApi));
+    this.byKeyModelDay = new Map(Object.entries(s.byKeyModelDay));
+    this.totals = s.totals;
+  }
+
+  private writeSummary(authDir: string): void {
+    const s: StatsSummaryFile = {
+      v: 1,
+      gen: this.gen,
+      savedAt: new Date().toISOString(),
+      byClient: Object.fromEntries(this.byClient),
+      byAccount: Object.fromEntries(this.byAccount),
+      byApi: Object.fromEntries(this.byApi),
+      byKeyModelDay: Object.fromEntries(this.byKeyModelDay),
+      totals: this.totals,
+    };
+    writeFileAtomic(statsSummaryPath(authDir), JSON.stringify(s));
+  }
+
+  /** Test-only: record a fully formed event (fixed timestamp) as record() would. */
+  applyEventAndAppendForTest(event: StatsEvent): void {
+    this.appendEvent(event);
+  }
+
+  /** Test-only: wait until every closed stream has flushed and rotated files are gone. */
+  async flushForTest(): Promise<void> {
+    await this.pendingClose;
   }
 
   /**
@@ -169,6 +292,11 @@ export class StatsRecorder {
       ts: new Date().toISOString(),
       ...input,
     };
+    this.appendEvent(event);
+  }
+
+  private appendEvent(event: StatsEvent): void {
+    if (!this.enabled) return;
     this.applyEvent(event);
     if (this.appender) {
       try {
@@ -177,6 +305,8 @@ export class StatsRecorder {
         console.error("[stats] append failed:", err?.message);
       }
     }
+    this.sinceCompact++;
+    if (this.sinceCompact >= this.compactEvery) this.compact();
   }
 
   getSnapshot(): StatsSnapshot {
