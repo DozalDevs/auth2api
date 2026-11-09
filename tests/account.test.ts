@@ -908,3 +908,93 @@ test(
     );
   },
 );
+
+test("an admin can mint a setup code for a teammate by email, making their key the first time", async (t) => {
+  const { call, join } = await startApp(t);
+  await join("maria", "maria@example.com");
+
+  assert.equal(
+    (
+      await call("POST", "/admin/setup-codes", {
+        body: { email: "maria@example.com" },
+      })
+    ).status,
+    401,
+    "needs a key",
+  );
+  assert.equal(
+    (
+      await call("POST", "/admin/setup-codes", {
+        key: MARIA,
+        body: { email: "maria@example.com" },
+      })
+    ).status,
+    403,
+    "needs an admin key",
+  );
+  assert.equal(
+    (
+      await call("POST", "/admin/setup-codes", {
+        key: ADMIN,
+        body: { email: "nope" },
+      })
+    ).status,
+    400,
+  );
+
+  const forMaria = await call("POST", "/admin/setup-codes", {
+    key: ADMIN,
+    body: { email: " Maria@Example.com " },
+  });
+  assert.equal(forMaria.status, 201);
+  assert.equal(forMaria.body.created, false, "her existing key is used");
+  assert.equal(
+    forMaria.text.includes(MARIA),
+    false,
+    "the key itself never leaves",
+  );
+  assert.equal(
+    (
+      await call("POST", "/setup/redeem", {
+        body: { code: forMaria.body.code },
+      })
+    ).body.key,
+    MARIA,
+  );
+
+  const first = await call("POST", "/admin/setup-codes", {
+    key: ADMIN,
+    body: { email: "new.person@dozaldevs.com" },
+  });
+  assert.equal(first.status, 201);
+  assert.equal(first.body.created, true);
+  assert.equal(first.body.key_name, "staff-new.person-dozaldevs.com");
+  const newKey = (
+    await call("POST", "/setup/redeem", { body: { code: first.body.code } })
+  ).body.key;
+  assert.match(newKey, /^sk-/);
+
+  const listed = (
+    await call("GET", "/admin/keys", { key: ADMIN })
+  ).body.keys.find((k: any) => k.name === "staff-new.person-dozaldevs.com");
+  assert.deepEqual(
+    listed.models,
+    ["@standard"],
+    "a new teammate gets the standard models",
+  );
+
+  const again = await call("POST", "/admin/setup-codes", {
+    key: ADMIN,
+    body: { email: "NEW.person@dozaldevs.com" },
+  });
+  assert.equal(
+    again.body.created,
+    false,
+    "the second time reuses the same key",
+  );
+  assert.equal(
+    (await call("POST", "/setup/redeem", { body: { code: again.body.code } }))
+      .body.key,
+    newKey,
+  );
+});

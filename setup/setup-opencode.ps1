@@ -6,7 +6,7 @@
 # Re-run it any time: it updates the setup in place (for example after you are given more models).
 #
 # What it changes, and nothing else:
-#   ~\.config\opencode\opencode.json            adds a "dozaldevs-relay" provider (other settings are kept)
+#   ~\.config\opencode\opencode.json            adds a "dozaldevs-relay" provider and the DozalDevs server (other settings are kept)
 #   ~\.local\share\opencode\dozaldevs-relay.key your key, in a file only you can read
 # The settings file is backed up next to the original before it is changed.
 
@@ -127,6 +127,10 @@ function Update-Config([string[]]$Allowed, [string[]]$Usable, [hashtable]$Names)
     $existingProviders = $cfg.PSObject.Properties.Match('providers')
     if ($existingProviders.Count -eq 0 -or $existingProviders[0].Value -isnot [System.Management.Automation.PSCustomObject]) { Set-Prop $cfg 'providers' (New-Object psobject) }
     Set-Prop $cfg.providers $ProviderId ([pscustomobject][ordered]@{ name = $ProviderName; package = '@opencode/ai/providers/openai-compatible'; settings = ([pscustomobject][ordered]@{ baseURL = "$RelayUrl/v1"; apiKey = "{file:$KeyFileForJson}" }); models = $pm })
+    # DozalDevs itself: OpenCode signs in to it the first time it is used, so no key is pasted for it either.
+    $existingMcp = $cfg.PSObject.Properties.Match('mcp')
+    if ($existingMcp.Count -eq 0 -or $existingMcp[0].Value -isnot [System.Management.Automation.PSCustomObject]) { Set-Prop $cfg 'mcp' (New-Object psobject) }
+    Set-Prop $cfg.mcp 'dozaldevs' ([pscustomobject][ordered]@{ type = 'remote'; url = 'https://app.dozaldevs.com/mcp'; enabled = $true })
 
     $notes = @()
     $current = ''

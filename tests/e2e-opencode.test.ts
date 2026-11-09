@@ -101,6 +101,12 @@ test(
     );
     assert.match(models.out, /dozaldevs-relay\/gpt-6-luna/, models.out);
 
+    // DozalDevs itself is set up too: on a clean machine OpenCode finds it and asks to sign in.
+    const mcp = await exec("opencode", ["mcp", "list"], env, work, IS_WINDOWS);
+    const listed = mcp.out.replace(/\x1b\[[0-9;]*m/g, "");
+    assert.match(listed, /dozaldevs needs authentication/, listed);
+    assert.match(listed, /https:\/\/app\.dozaldevs\.com\/mcp/, listed);
+
     const run = await exec(
       "opencode",
       [

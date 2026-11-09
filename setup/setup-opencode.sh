@@ -9,7 +9,7 @@
 # Re-run it any time: it updates the setup in place (for example after you are given more models).
 #
 # What it changes, and nothing else:
-#   ~/.config/opencode/opencode.json            adds a "dozaldevs-relay" provider (other settings are kept)
+#   ~/.config/opencode/opencode.json            adds a "dozaldevs-relay" provider and the DozalDevs server (other settings are kept)
 #   ~/.local/share/opencode/dozaldevs-relay.key your key, in a file only you can read
 # The settings file is backed up next to the original before it is changed.
 
@@ -138,6 +138,9 @@ function run(argv) {
     allowed.forEach(function (m) { pm[m] = { name: names[m] || prettyName(m), family: m, releaseDate: releaseDate }; });
     if (!cfg.providers || typeof cfg.providers !== 'object' || Array.isArray(cfg.providers)) cfg.providers = {};
     cfg.providers[id] = { name: name, package: '@opencode/ai/providers/openai-compatible', settings: { baseURL: baseURL, apiKey: '{file:' + keyFile + '}' }, models: pm };
+    // DozalDevs itself: OpenCode signs in to it the first time it is used, so no key is pasted for it either.
+    if (!cfg.mcp || typeof cfg.mcp !== 'object' || Array.isArray(cfg.mcp)) cfg.mcp = {};
+    cfg.mcp.dozaldevs = { type: 'remote', url: 'https://app.dozaldevs.com/mcp', enabled: true };
     var notes = [];
     var current = typeof cfg.model === 'string' ? cfg.model : '';
     var ours = current.indexOf(id + '/') === 0;
@@ -235,6 +238,10 @@ elif op == 'config':
     if not isinstance(cfg.get('providers'), dict):
         cfg['providers'] = {}
     cfg['providers'][pid] = {'name': name, 'package': '@opencode/ai/providers/openai-compatible', 'settings': {'baseURL': base, 'apiKey': '{file:' + key_file + '}'}, 'models': {m: {'name': names.get(m) or pretty_name(m), 'family': m, 'releaseDate': release_date} for m in allowed}}
+    # DozalDevs itself: OpenCode signs in to it the first time it is used, so no key is pasted for it either.
+    if not isinstance(cfg.get('mcp'), dict):
+        cfg['mcp'] = {}
+    cfg['mcp']['dozaldevs'] = {'type': 'remote', 'url': 'https://app.dozaldevs.com/mcp', 'enabled': True}
     notes = []
     current = cfg['model'] if isinstance(cfg.get('model'), str) else ''
     ours = current.startswith(pid + '/')
