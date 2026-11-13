@@ -58,6 +58,16 @@ import {
   checkLogin,
 } from "./auth/dashboard-login";
 
+/**
+ * The caller label a client puts in X-Relay-Caller (environment plus an org, agent or service id,
+ * never a secret), kept to one short, plain token so it cannot break or forge a log line.
+ */
+function callerTag(header: string | string[] | undefined): string | undefined {
+  const raw = Array.isArray(header) ? header[0] : header;
+  if (!raw) return undefined;
+  return raw.replace(/[^A-Za-z0-9._:/@=-]/g, "_").slice(0, 80) || undefined;
+}
+
 function agoText(ms: number): string {
   const minutes = Math.max(0, Math.round(ms / 60_000));
   if (minutes < 1) return "less than a minute ago";
@@ -198,6 +208,7 @@ export function createServer(
   ) => {
     if (!statsRecorder) return;
     res.locals.stats = {
+      caller: callerTag(req.headers["x-relay-caller"]),
       apiKeyHash: hashApiKey(secret),
       ip: clientIp(req),
       ua: (req.headers["user-agent"] as string) || "",
@@ -249,6 +260,7 @@ export function createServer(
       recorded = true;
       const ctx = res.locals.stats as
         | {
+            caller: string | undefined;
             apiKeyHash: string;
             ip: string;
             ua: string;
@@ -278,6 +290,7 @@ export function createServer(
         statusCode: override?.statusCode ?? res.statusCode,
         latencyMs: Date.now() - ctx.startedAt,
         usage: ctx.usage,
+        ...(ctx.caller ? { caller: ctx.caller } : {}),
       });
     };
     res.on("finish", () => recordStats());
