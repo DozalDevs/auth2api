@@ -50,7 +50,29 @@ export interface StatsEvent {
   statusCode: number;
   latencyMs: number;
   usage: UsageData | null;
+  /** Who sent the request, from the client's X-Relay-Caller header; absent on older lines. */
+  caller?: string;
 }
+
+/** One caller's totals inside a caller window. */
+export interface CallerWindowRow {
+  caller: string;
+  requests: number;
+  failures: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadInputTokens: number;
+}
+
+/** Requests per caller between two reads of the window. */
+export interface CallerWindow {
+  from: string;
+  to: string;
+  rows: CallerWindowRow[];
+}
+
+/** How often the caller window is printed, beside the accounts' own stats lines. */
+const CALLER_LOG_INTERVAL_MS = 5 * 60 * 1000;
 
 interface BaseBucket {
   requests: number;
@@ -158,6 +180,9 @@ export class StatsRecorder {
   private sinceCompact = 0;
   private readonly compactEvery: number;
   private pendingClose: Promise<void> = Promise.resolve();
+  private callerWindow = new Map<string, CallerWindowRow>();
+  private callerWindowFrom = new Date().toISOString();
+  private callerLogTimer: NodeJS.Timeout | null = null;
 
   constructor(options: { compactEvery?: number } = {}) {
     this.compactEvery = options.compactEvery ?? DEFAULT_COMPACT_EVERY;
@@ -203,6 +228,10 @@ export class StatsRecorder {
 
   async stop(): Promise<void> {
     this.enabled = false;
+    if (this.callerLogTimer) {
+      clearInterval(this.callerLogTimer);
+      this.callerLogTimer = null;
+    }
     if (this.appender) {
       await this.appender.close();
       this.appender = null;
@@ -298,6 +327,7 @@ export class StatsRecorder {
   private appendEvent(event: StatsEvent): void {
     if (!this.enabled) return;
     this.applyEvent(event);
+    this.addToCallerWindow(event);
     if (this.appender) {
       try {
         this.appender.append(event);
@@ -307,6 +337,72 @@ export class StatsRecorder {
     }
     this.sinceCompact++;
     if (this.sinceCompact >= this.compactEvery) this.compact();
+  }
+
+  /**
+   * Live requests only (never the boot replay), so each printed window says who used the relay in
+   * that stretch of time. A request with no caller header is named by its key's short hash.
+   */
+  private addToCallerWindow(ev: StatsEvent): void {
+    const caller = ev.caller || `untagged key=${ev.apiKeyHash.slice(0, 12)}`;
+    let row = this.callerWindow.get(caller);
+    if (!row) {
+      row = {
+        caller,
+        requests: 0,
+        failures: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadInputTokens: 0,
+      };
+      this.callerWindow.set(caller, row);
+    }
+    row.requests++;
+    if (ev.status === "failure") row.failures++;
+    if (ev.usage) {
+      row.inputTokens += ev.usage.inputTokens;
+      row.outputTokens += ev.usage.outputTokens;
+      row.cacheReadInputTokens += ev.usage.cacheReadInputTokens;
+    }
+  }
+
+  /** The callers since the last read, most tokens first, and an empty window after it. */
+  takeCallerWindow(): CallerWindow {
+    const to = new Date().toISOString();
+    const tokens = (r: CallerWindowRow) => r.inputTokens + r.outputTokens;
+    const rows = [...this.callerWindow.values()].sort(
+      (a, b) => tokens(b) - tokens(a) || b.requests - a.requests,
+    );
+    const window = { from: this.callerWindowFrom, to, rows };
+    this.callerWindow = new Map();
+    this.callerWindowFrom = to;
+    return window;
+  }
+
+  formatCallerWindow(window: CallerWindow): string[] {
+    return [
+      `\n===== caller stats (${window.from} to ${window.to}) =====`,
+      ...(window.rows.length === 0
+        ? ["  no requests"]
+        : window.rows.map(
+            (r) =>
+              `  caller=${r.caller}: requests=${r.requests}, failures=${r.failures}, ` +
+              `input_tokens=${r.inputTokens}, cache_read=${r.cacheReadInputTokens}, ` +
+              `output_tokens=${r.outputTokens}`,
+          )),
+      `====================================================\n`,
+    ];
+  }
+
+  /** Prints the caller window on the same five-minute beat as the account stats. */
+  startCallerLog(): void {
+    const timer = setInterval(() => {
+      for (const line of this.formatCallerWindow(this.takeCallerWindow())) {
+        console.log(line);
+      }
+    }, CALLER_LOG_INTERVAL_MS);
+    timer.unref();
+    this.callerLogTimer = timer;
   }
 
   getSnapshot(): StatsSnapshot {

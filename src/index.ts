@@ -191,6 +191,7 @@ async function startServer(): Promise<void> {
   if (config.stats.enabled) {
     statsRecorder = new StatsRecorder();
     statsRecorder.start(authDir);
+    statsRecorder.startCallerLog();
   }
 
   const app = createServer(config, registry, statsRecorder, {
