@@ -1,4 +1,5 @@
 import test from "node:test";
+import { once } from "node:events";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -14,6 +15,13 @@ import {
 import { createServer } from "../src/server";
 import { buildRegistry } from "../src/providers/registry";
 import { GoGuard, GoGuardConfig, validateGoGuard } from "../src/go-guard/guard";
+
+/** A scratch folder that is removed when the test ends. */
+function scratchDir(t: test.TestContext, name: string): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `auth2api-${name}-`));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
 
 const NOW = Date.parse("2099-01-07T12:00:00Z"); // a Wednesday
 
@@ -128,8 +136,7 @@ test("the guard does nothing when switched off", () => {
 });
 
 test("the relay refuses a guarded call before it reaches a model, and the admin call gives a go-ahead that persists", async (t) => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "auth2api-goguard-"));
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const dir = scratchDir(t, "goguard");
   const KEY = "sk-dev-0123456789abcdef";
   const ADMIN = "sk-admin-0123456789abcdef";
   const configPath = path.join(dir, "config.yaml");
@@ -156,12 +163,10 @@ test("the relay refuses a guarded call before it reaches a model, and the admin 
     port: 0,
     stats: { enabled: false },
   };
-  const app = createServer(config, buildRegistry(dir), undefined, {
-    persistKeys: persistApiKeys(configPath),
-    persistGoGuard: persistGoGuard(configPath),
-  });
+  const persist = { persistGoGuard: persistGoGuard(configPath) };
+  const app = createServer(config, buildRegistry(dir), undefined, persist);
   const server = app.listen(0, "127.0.0.1");
-  await new Promise<void>((r) => server.once("listening", r));
+  await once(server, "listening");
   t.after(() => server.close());
   const base = `http://127.0.0.1:${(server.address() as any).port}`;
   const call = (caller: string) =>
@@ -235,10 +240,7 @@ test("hitting a limit tells the operator once per period, and a new week starts 
 });
 
 test("counts survive a restart through the counts file", (t) => {
-  const dir = fs.mkdtempSync(
-    path.join(os.tmpdir(), "auth2api-goguard-counts-"),
-  );
-  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const dir = scratchDir(t, "goguard-counts");
   const countsFile = path.join(dir, "counts.json");
   const cfg = (): GoGuardConfig => ({
     enabled: true,
