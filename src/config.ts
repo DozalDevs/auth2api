@@ -1,3 +1,4 @@
+import { GoGuardConfig, validateGoGuard } from "./go-guard/guard";
 import crypto from "crypto";
 import fs from "fs";
 import path from "path";
@@ -199,6 +200,8 @@ export interface Config {
   invites?: Invite[];
   "admin-invites"?: AdminInvite[];
   notifications?: NotificationsConfig;
+  /** Go-ahead guard for a relay shared by agents, CI and people; see go-guard/guard.ts. */
+  "go-guard"?: GoGuardConfig;
   /** The address people use to reach this relay, for links in messages. No trailing slash. */
   "public-url"?: string;
   "body-limit": string;
@@ -739,6 +742,7 @@ export function loadConfig(configPath?: string): Config {
   raw.invites = validateInvites(raw.invites);
   raw.notifications = validateNotifications(raw.notifications);
   raw["public-url"] = validatePublicUrl(raw["public-url"]);
+  raw["go-guard"] = validateGoGuard(raw["go-guard"]);
   const keyNames = new Set(raw["api-keys"].map((k) => k.name.toLowerCase()));
   const keep = <T extends { key: string; email: string }>(
     items: T[],
@@ -790,6 +794,12 @@ export function persistApiKeys(
   filePath: string,
 ): (entries: ApiKeyEntry[]) => void {
   return persistSection(filePath, "api-keys");
+}
+
+export function persistGoGuard(
+  filePath: string,
+): (guard: GoGuardConfig) => void {
+  return persistSection(filePath, "go-guard");
 }
 
 export function persistAccessRequests(
