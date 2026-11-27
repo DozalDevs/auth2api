@@ -6,6 +6,7 @@ import {
   loadConfig,
   persistAccessRequests,
   persistAdminInvites,
+  persistGoGuard,
   persistApiKeys,
   persistCatalog,
   persistDashboardUsers,
@@ -202,6 +203,7 @@ async function startServer(): Promise<void> {
     persistInvites: persistInvites(configPath || "config.yaml"),
     persistDashboardUsers: persistDashboardUsers(configPath || "config.yaml"),
     persistAdminInvites: persistAdminInvites(configPath || "config.yaml"),
+    persistGoGuard: persistGoGuard(configPath || "config.yaml"),
   });
   const host = config.host || "127.0.0.1";
   const port = config.port;

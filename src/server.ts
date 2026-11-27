@@ -1,5 +1,6 @@
 import express from "express";
-import { Config, isDebugLevel } from "./config";
+import path from "path";
+import { Config, isDebugLevel, resolveAuthDir } from "./config";
 import { ProviderRegistry } from "./providers/registry";
 import { extractApiKey, hashApiKey } from "./utils/common";
 import {
@@ -50,6 +51,7 @@ import { createGoHandler, isGoModel } from "./opencode-go/proxy";
 import { registerGoAdminRoutes } from "./opencode-go/routes";
 import { DASHBOARD_CSP, DASHBOARD_HTML } from "./ui/dashboard";
 import { registerSetupRoutes } from "./setup/routes";
+import { GoGuard, GoGuardConfig, validateGoAhead } from "./go-guard/guard";
 import {
   LoginThrottle,
   SESSION_COOKIE,
@@ -88,6 +90,7 @@ export function createServer(
     persistInvites?: (invites: Invite[]) => void;
     persistDashboardUsers?: (users: DashboardUser[]) => void;
     persistAdminInvites?: (invites: AdminInvite[]) => void;
+    persistGoGuard?: (guard: GoGuardConfig) => void;
     now?: () => number;
   } = {},
 ): express.Application {
@@ -150,6 +153,18 @@ export function createServer(
       reviewUrl: publicUrl ? `${publicUrl}/admin/ui?tab=requests` : undefined,
     });
   };
+  const goGuard = config["go-guard"]
+    ? new GoGuard(config["go-guard"], {
+        persist: opts.persistGoGuard,
+        now: opts.now,
+        countsFile: path.join(
+          resolveAuthDir(config["auth-dir"]),
+          "go-guard-counts.json",
+        ),
+        onLimit: (message) =>
+          void notifier?.post(`Shared relay limit reached: ${message}`),
+      })
+    : undefined;
   const goPool = new GoKeyPool(config["opencode-go"]?.keys ?? []);
 
   app.use(express.json({ limit: config["body-limit"] }));
@@ -502,6 +517,71 @@ export function createServer(
   registerGoAdminRoutes(app, config, goPool, catalog);
   registerRequestAdminRoutes(app, accessRequests, keyStore);
 
+  // The go-ahead guard's list, and the calls the operator uses to give or end
+  // one agent run's go-ahead.
+  app.get("/admin/go-guard", (_req, res) => {
+    if (!goGuard) return res.json({ configured: false });
+    res.json({ configured: true, ...goGuard.list() });
+  });
+  app.post("/admin/go-guard/go-aheads", (req, res) => {
+    if (!goGuard) {
+      res.status(409).json({
+        error: {
+          message:
+            "this relay has no go-guard section in config.yaml; add one to use go-aheads",
+        },
+      });
+      return;
+    }
+    let go;
+    try {
+      go = validateGoAhead(req.body);
+    } catch (e) {
+      res.status(400).json({ error: { message: (e as Error).message } });
+      return;
+    }
+    try {
+      goGuard.setGoAhead(go);
+      res.json(go);
+    } catch (e) {
+      console.error(
+        `[go-guard] could not save the config: ${(e as Error).message}`,
+      );
+      res.status(500).json({
+        error: {
+          message:
+            "could not save the go-ahead, so nothing was changed. Try again; if it fails again, check the relay's disk and its log",
+        },
+      });
+    }
+  });
+  app.delete("/admin/go-guard/go-aheads/:agent", (req, res) => {
+    try {
+      if (!goGuard?.removeGoAhead(req.params.agent)) {
+        res
+          .status(404)
+          .json({
+            error: {
+              message:
+                "no go-ahead by that name; GET /admin/go-guard lists them",
+            },
+          });
+        return;
+      }
+      res.json({ removed: req.params.agent });
+    } catch (e) {
+      console.error(
+        `[go-guard] could not save the config: ${(e as Error).message}`,
+      );
+      res.status(500).json({
+        error: {
+          message:
+            "could not save the change, so nothing was removed. Try again; if it fails again, check the relay's disk and its log",
+        },
+      });
+    }
+  });
+
   // GET /admin/stats — three-axis aggregated call statistics.
   //   byClient — keyed by sha256(api-key); show short hex prefix to operator
   //   byAccount — keyed by `${provider}:${email}` (upstream OAuth account)
@@ -595,6 +675,21 @@ export function createServer(
   app.use(["/v1", "/codex", "/backend-api/codex"], requireApiKey);
   app.use(["/v1", "/codex", "/backend-api/codex"], statsFinishMiddleware);
   app.use("/v1/images", defaultImageModel(catalog));
+
+  // Go-ahead guard: on a shared relay, a guarded key's model calls need a
+  // live go-ahead or a standing one (see go-guard/guard.ts).
+  app.use(["/v1", "/codex", "/backend-api/codex"], (req, res, next) => {
+    if (req.method !== "POST" || !goGuard?.enabled) return next();
+    const entry = res.locals.keyEntry as ApiKeyEntry;
+    const verdict = goGuard.check(
+      entry.name,
+      callerTag(req.headers["x-relay-caller"]),
+    );
+    if (verdict.allow) return next();
+    res.status(verdict.status).json({
+      error: { message: verdict.message, type: "go_ahead_required" },
+    });
+  });
 
   // Per-key policy for calls that consume the subscription: model allowlist
   // (checked after alias resolution) and the daily token cap. Runs after the
