@@ -13,7 +13,7 @@ import {
 } from "../src/config";
 import { createServer } from "../src/server";
 import { buildRegistry } from "../src/providers/registry";
-import { GoGuard, GoGuardConfig } from "../src/go-guard/guard";
+import { GoGuard, GoGuardConfig, validateGoGuard } from "../src/go-guard/guard";
 
 const NOW = Date.parse("2099-01-07T12:00:00Z"); // a Wednesday
 
@@ -24,7 +24,7 @@ function guard(over: Partial<GoGuardConfig> = {}) {
       "guarded-keys": ["ai-employee-dev"],
       "ask-whom": "finicky-cat (8aa4f5f)",
       standing: [
-        { name: "platform", "caller-prefix": "prod/" },
+        { name: "platform", "caller-prefix": "prod/", "weekly-cap": 100 },
         {
           name: "CI",
           "caller-prefix": "dev/dozaldevs-app@vm",
@@ -76,7 +76,7 @@ test("an ended or unknown go-ahead is refused", () => {
   );
 });
 
-test("standing go-aheads: platform uncapped, CI and teammates capped per week", () => {
+test("standing go-aheads: platform, CI and teammates capped per week", () => {
   const g = guard();
   for (let i = 0; i < 50; i++)
     assert.equal(
@@ -101,6 +101,16 @@ test("standing go-aheads: platform uncapped, CI and teammates capped per week", 
     g.check("Arturo", undefined).allow,
     true,
     "a person's own key with no entry is not guarded",
+  );
+});
+
+test("a standing entry without a weekly cap is rejected at load", () => {
+  assert.throws(
+    () =>
+      validateGoGuard({
+        standing: [{ name: "prod", "caller-prefix": "prod/" }],
+      }),
+    /weekly-cap/,
   );
 });
 

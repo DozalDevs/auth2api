@@ -8,6 +8,11 @@
  *   a teammate's own key), matched by key name or caller-label prefix, with a
  *   weekly request cap.
  *
+ * Caller labels are set by the client, so this stops callers that forget or
+ * skip a go-ahead, not one that forges a label. That is why every standing
+ * entry, production's included, carries a weekly cap: a forged label can at
+ * most use that entry's week.
+ *
  * Anything else is refused with a message saying why and who to ask. Off
  * unless `go-guard.enabled` is true, so one config switch turns it back off.
  *
@@ -31,8 +36,8 @@ export interface StandingGoAhead {
   key?: string;
   /** Matches calls whose caller label starts with this. */
   "caller-prefix"?: string;
-  /** Requests allowed per UTC week (Monday start). No cap when absent. */
-  "weekly-cap"?: number;
+  /** Requests allowed per UTC week (Monday start). Every standing entry has one. */
+  "weekly-cap": number;
 }
 
 export interface GoGuardConfig {
@@ -89,9 +94,7 @@ export function validateGoGuard(raw: unknown): GoGuardConfig | undefined {
       ...(typeof e["caller-prefix"] === "string" && {
         "caller-prefix": e["caller-prefix"],
       }),
-      ...(e["weekly-cap"] != null && {
-        "weekly-cap": posInt(e["weekly-cap"], `standing[${i}].weekly-cap`),
-      }),
+      "weekly-cap": posInt(e["weekly-cap"], `standing[${i}].weekly-cap`),
     } as StandingGoAhead;
   });
   const goAheads = list(r["go-aheads"], "go-aheads").map((g, i) =>
@@ -179,7 +182,6 @@ export class GoGuard {
     );
     if (standing) {
       const cap = standing["weekly-cap"];
-      if (cap === undefined) return { allow: true, via: standing.name };
       const wk = weekStart(now);
       if (wk !== this.week) {
         this.week = wk;

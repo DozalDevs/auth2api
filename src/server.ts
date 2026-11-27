@@ -518,11 +518,9 @@ export function createServer(
   });
   app.post("/admin/go-guard/go-aheads", (req, res) => {
     if (!goGuard) {
-      res
-        .status(409)
-        .json({
-          error: { message: "go-guard is not configured on this relay" },
-        });
+      res.status(409).json({
+        error: { message: "go-guard is not configured on this relay" },
+      });
       return;
     }
     try {
@@ -635,9 +633,6 @@ export function createServer(
   app.use(["/v1", "/codex", "/backend-api/codex"], statsFinishMiddleware);
   app.use("/v1/images", defaultImageModel(catalog));
 
-  // Per-key policy for calls that consume the subscription: model allowlist
-  // (checked after alias resolution) and the daily token cap. Runs after the
-  // stats middleware so refused calls still show up in usage reports.
   // Go-ahead guard: on a shared relay, a guarded key's model calls need a
   // live go-ahead or a standing one (see go-guard/guard.ts).
   app.use(["/v1", "/codex", "/backend-api/codex"], (req, res, next) => {
@@ -653,6 +648,9 @@ export function createServer(
     });
   });
 
+  // Per-key policy for calls that consume the subscription: model allowlist
+  // (checked after alias resolution) and the daily token cap. Runs after the
+  // stats middleware so refused calls still show up in usage reports.
   app.use(["/v1", "/codex", "/backend-api/codex"], (req, res, next) => {
     if (req.method !== "POST") return next();
     const entry = res.locals.keyEntry as ApiKeyEntry;
