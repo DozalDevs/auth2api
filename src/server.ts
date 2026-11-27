@@ -547,19 +547,25 @@ export function createServer(
       console.error(
         `[go-guard] could not save the config: ${(e as Error).message}`,
       );
-      res
-        .status(500)
-        .json({
-          error: {
-            message: "could not save the go-ahead; nothing was changed",
-          },
-        });
+      res.status(500).json({
+        error: {
+          message:
+            "could not save the go-ahead, so nothing was changed. Try again; if it fails again, check the relay's disk and its log",
+        },
+      });
     }
   });
   app.delete("/admin/go-guard/go-aheads/:agent", (req, res) => {
     try {
       if (!goGuard?.removeGoAhead(req.params.agent)) {
-        res.status(404).json({ error: { message: "no such go-ahead" } });
+        res
+          .status(404)
+          .json({
+            error: {
+              message:
+                "no go-ahead by that name; GET /admin/go-guard lists them",
+            },
+          });
         return;
       }
       res.json({ removed: req.params.agent });
@@ -567,11 +573,12 @@ export function createServer(
       console.error(
         `[go-guard] could not save the config: ${(e as Error).message}`,
       );
-      res
-        .status(500)
-        .json({
-          error: { message: "could not save the change; nothing was removed" },
-        });
+      res.status(500).json({
+        error: {
+          message:
+            "could not save the change, so nothing was removed. Try again; if it fails again, check the relay's disk and its log",
+        },
+      });
     }
   });
 
