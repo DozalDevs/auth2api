@@ -50,6 +50,11 @@ export class SlackNotifier {
   ) {}
 
   async requestCreated(n: RequestNotice): Promise<void> {
+    await this.post(requestMessage(n));
+  }
+
+  /** Posts one plain line to the channel; never throws. */
+  async post(text: string): Promise<void> {
     try {
       const res = await this.send(
         `${this.cfg["api-base"] ?? "https://slack.com/api"}/chat.postMessage`,
@@ -61,7 +66,7 @@ export class SlackNotifier {
           },
           body: JSON.stringify({
             channel: this.cfg.channel,
-            text: requestMessage(n),
+            text,
             unfurl_links: false,
           }),
           signal: AbortSignal.timeout(5000),

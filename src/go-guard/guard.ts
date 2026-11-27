@@ -16,9 +16,13 @@
  * Anything else is refused with a message saying why and who to ask. Off
  * unless `go-guard.enabled` is true, so one config switch turns it back off.
  *
- * Request counts live in memory: a restart starts them over, which only ever
- * lets a few more calls through, never refuses one wrongly.
+ * Request counts are saved to a small file (`countsFile`) a few seconds after
+ * they change and read back at start, so a restart or deploy keeps them. The
+ * first refusal for each go-ahead or standing entry in a period calls
+ * `onLimit`, which the server sends to the operator's Slack channel.
  */
+
+import fs from "fs";
 
 export interface GoAhead {
   /** The name in the caller label's `/go:<agent>`. */
@@ -123,18 +127,81 @@ export function validateGoAhead(g: unknown, where = "go-ahead"): GoAhead {
   return { agent: e.agent, until: new Date(e.until).toISOString(), cap: e.cap };
 }
 
+interface SavedCounts {
+  used: Record<string, number>;
+  week: string;
+  weekly: Record<string, number>;
+}
+
 export class GoGuard {
   private used = new Map<string, number>();
   private weekly = new Map<string, number>();
   private week = "";
+  private alerted = new Set<string>();
+  private saveTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     private config: GoGuardConfig,
     private opts: {
       persist?: (c: GoGuardConfig) => void;
       now?: () => number;
+      /** Where request counts are kept across restarts. */
+      countsFile?: string;
+      /** Told once per go-ahead or standing entry per period when a call is refused for its limit. */
+      onLimit?: (message: string) => void;
     } = {},
-  ) {}
+  ) {
+    this.loadCounts();
+  }
+
+  private loadCounts(): void {
+    const file = this.opts.countsFile;
+    if (!file || !fs.existsSync(file)) return;
+    try {
+      const saved = JSON.parse(fs.readFileSync(file, "utf8")) as SavedCounts;
+      this.used = new Map(Object.entries(saved.used ?? {}));
+      this.week = saved.week ?? "";
+      this.weekly = new Map(Object.entries(saved.weekly ?? {}));
+    } catch (err) {
+      console.error(
+        `[go-guard] could not read saved counts from ${file}, starting from zero: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  /** Writes the counts now (normally 5 s after a change, so a crash loses at most those seconds). */
+  saveCounts(): void {
+    if (this.saveTimer) clearTimeout(this.saveTimer);
+    this.saveTimer = undefined;
+    const file = this.opts.countsFile;
+    if (!file) return;
+    const saved: SavedCounts = {
+      used: Object.fromEntries(this.used),
+      week: this.week,
+      weekly: Object.fromEntries(this.weekly),
+    };
+    try {
+      fs.writeFileSync(`${file}.tmp`, JSON.stringify(saved), { mode: 0o600 });
+      fs.renameSync(`${file}.tmp`, file);
+    } catch (err) {
+      console.error(
+        `[go-guard] could not save counts to ${file}: ${(err as Error).message}`,
+      );
+    }
+  }
+
+  private countChanged(): void {
+    if (!this.opts.countsFile || this.saveTimer) return;
+    this.saveTimer = setTimeout(() => this.saveCounts(), 5000);
+    this.saveTimer.unref?.();
+  }
+
+  private limitReached(id: string, message: string): void {
+    console.warn(`[go-guard] ${message}`);
+    if (this.alerted.has(id)) return;
+    this.alerted.add(id);
+    this.opts.onLimit?.(message);
+  }
 
   private now(): number {
     return this.opts.now ? this.opts.now() : Date.now();
@@ -158,25 +225,24 @@ export class GoGuard {
           return {
             allow: false,
             status: 403,
-            message: `The go-ahead for "${agent}" on this shared test relay ended at ${go.until}. Ask ${ask} for a new one before sending more.`,
+            message: `The go-ahead for "${agent}" on this shared relay ended at ${go.until}. Ask ${ask} for a new one before sending more.`,
           };
         }
         const n = this.used.get(agent) ?? 0;
         if (n >= go.cap) {
-          return {
-            allow: false,
-            status: 429,
-            message: `"${agent}" used all ${go.cap} requests of its go-ahead on this shared test relay. Stop here and ask ${ask} for more.`,
-          };
+          const message = `"${agent}" used all ${go.cap} requests of its go-ahead on this shared relay. Stop here and ask ${ask} for more.`;
+          this.limitReached(`go:${agent}:${go.until}`, message);
+          return { allow: false, status: 429, message };
         }
         this.used.set(agent, n + 1);
+        this.countChanged();
         return { allow: true, via: `go:${agent}` };
       }
     }
 
     const standing = this.config.standing.find(
       (s) =>
-        (s.key !== undefined && s.key === keyName) ||
+        s.key === keyName ||
         (s["caller-prefix"] !== undefined &&
           caller?.startsWith(s["caller-prefix"])),
     );
@@ -189,13 +255,12 @@ export class GoGuard {
       }
       const n = this.weekly.get(standing.name) ?? 0;
       if (n >= cap) {
-        return {
-          allow: false,
-          status: 429,
-          message: `"${standing.name}" reached its ${cap} requests for this week on the shared test relay. It starts over on Monday (UTC); ask ${ask} if you need more now.`,
-        };
+        const message = `"${standing.name}" reached its ${cap} requests for this week on the shared relay. It starts over on Monday (UTC); ask ${ask} if you need more now.`;
+        this.limitReached(`standing:${standing.name}:${wk}`, message);
+        return { allow: false, status: 429, message };
       }
       this.weekly.set(standing.name, n + 1);
+      this.countChanged();
       return { allow: true, via: standing.name };
     }
 
@@ -206,8 +271,8 @@ export class GoGuard {
       allow: false,
       status: 403,
       message: agent
-        ? `There is no go-ahead named "${agent}" on this shared test relay. Ask ${ask} for one, and send the exact label they give you.`
-        : `This shared test relay needs a go-ahead for every agent run, and this call had none (caller "${caller ?? "none"}"). Ask ${ask} for a go-ahead with a request cap, then send it in X-Relay-Caller as /go:<name>.`,
+        ? `There is no go-ahead named "${agent}" on this shared relay. Ask ${ask} for one, and send the exact label they give you.`
+        : `This shared relay needs a go-ahead for every agent run, and this call had none (caller "${caller ?? "none"}"). Ask ${ask} for a go-ahead with a request cap, then send it in X-Relay-Caller as /go:<name>.`,
     };
   }
 
@@ -237,24 +302,29 @@ export class GoGuard {
   /** Adds or replaces one agent's go-ahead; its count starts over. Drops ended ones. */
   setGoAhead(go: GoAhead): void {
     const now = this.now();
-    this.config["go-aheads"] = [
-      ...this.config["go-aheads"].filter(
-        (g) => g.agent !== go.agent && Date.parse(g.until) > now,
-      ),
-      go,
-    ];
+    const next = {
+      ...this.config,
+      "go-aheads": [
+        ...this.config["go-aheads"].filter(
+          (g) => g.agent !== go.agent && Date.parse(g.until) > now,
+        ),
+        go,
+      ],
+    };
+    this.opts.persist?.(next);
+    this.config = next;
     this.used.delete(go.agent);
-    this.opts.persist?.(this.config);
+    this.countChanged();
   }
 
   removeGoAhead(agent: string): boolean {
-    const before = this.config["go-aheads"].length;
-    this.config["go-aheads"] = this.config["go-aheads"].filter(
-      (g) => g.agent !== agent,
-    );
+    const kept = this.config["go-aheads"].filter((g) => g.agent !== agent);
+    if (kept.length === this.config["go-aheads"].length) return false;
+    const next = { ...this.config, "go-aheads": kept };
+    this.opts.persist?.(next);
+    this.config = next;
     this.used.delete(agent);
-    if (this.config["go-aheads"].length === before) return false;
-    this.opts.persist?.(this.config);
+    this.countChanged();
     return true;
   }
 }

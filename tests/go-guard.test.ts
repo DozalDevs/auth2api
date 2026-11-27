@@ -67,11 +67,17 @@ test("an ended or unknown go-ahead is refused", () => {
     "go-aheads": [{ agent: "old", until: "2099-01-07T11:00:00Z", cap: 9 }],
   });
   assert.match(
-    String((ended.check("ai-employee-dev", "x/go:old") as any).message),
+    String(
+      (ended.check("ai-employee-dev", "x/go:old") as { message?: string })
+        .message,
+    ),
     /ended/,
   );
   assert.match(
-    String((guard().check("ai-employee-dev", "x/go:nobody") as any).message),
+    String(
+      (guard().check("ai-employee-dev", "x/go:nobody") as { message?: string })
+        .message,
+    ),
     /no go-ahead named "nobody"/,
   );
 });
@@ -191,8 +197,9 @@ test("the relay refuses a guarded call before it reaches a model, and the admin 
   });
   assert.equal(give.status, 200);
   const passed = await call("dev/x@h/go:c92fd7e");
-  assert.notEqual(passed.status, 403, "a go-ahead call goes past the guard");
-  await passed.text();
+  const passedBody = (await passed.json().catch(() => ({}))) as any;
+  assert.ok(![403, 429].includes(passed.status), `got ${passed.status}`);
+  assert.notEqual(passedBody?.error?.type, "go_ahead_required");
 
   const saved = yaml.load(fs.readFileSync(configPath, "utf8")) as any;
   assert.equal(saved["go-guard"]["go-aheads"][0].agent, "c92fd7e");
@@ -202,4 +209,50 @@ test("the relay refuses a guarded call before it reaches a model, and the admin 
     })
   ).json()) as any;
   assert.equal(listed["go-aheads"][0].used, 1);
+});
+
+test("hitting a limit tells the operator once per period, and a new week starts the count over", () => {
+  let t = Date.parse("2099-01-11T23:00:00Z"); // Sunday
+  const told: string[] = [];
+  const g = new GoGuard(
+    {
+      enabled: true,
+      "guarded-keys": [],
+      "ask-whom": "x",
+      standing: [{ name: "Sofia", key: "Sofia", "weekly-cap": 1 }],
+      "go-aheads": [],
+    },
+    { now: () => t, onLimit: (m) => told.push(m) },
+  );
+  assert.equal(g.check("Sofia", undefined).allow, true);
+  const refused = g.check("Sofia", undefined);
+  assert.ok(!refused.allow && refused.status === 429);
+  assert.match(refused.message, /starts over on Monday/);
+  g.check("Sofia", undefined);
+  assert.equal(told.length, 1, "one notice per entry per week");
+  t = Date.parse("2099-01-12T01:00:00Z"); // Monday
+  assert.equal(g.check("Sofia", undefined).allow, true);
+});
+
+test("counts survive a restart through the counts file", (t) => {
+  const dir = fs.mkdtempSync(
+    path.join(os.tmpdir(), "auth2api-goguard-counts-"),
+  );
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const countsFile = path.join(dir, "counts.json");
+  const cfg = (): GoGuardConfig => ({
+    enabled: true,
+    "guarded-keys": ["dev"],
+    "ask-whom": "x",
+    standing: [{ name: "CI", "caller-prefix": "ci/", "weekly-cap": 2 }],
+    "go-aheads": [{ agent: "a1", until: "2099-01-07T13:00:00Z", cap: 1 }],
+  });
+  const first = new GoGuard(cfg(), { now: () => NOW, countsFile });
+  assert.equal(first.check("dev", "ci/run").allow, true);
+  assert.equal(first.check("dev", "ci/run").allow, true);
+  assert.equal(first.check("dev", "x/go:a1").allow, true);
+  first.saveCounts();
+  const second = new GoGuard(cfg(), { now: () => NOW, countsFile });
+  assert.equal(second.check("dev", "ci/run").allow, false);
+  assert.equal(second.check("dev", "x/go:a1").allow, false);
 });

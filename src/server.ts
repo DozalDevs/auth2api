@@ -1,5 +1,6 @@
 import express from "express";
-import { Config, isDebugLevel } from "./config";
+import path from "path";
+import { Config, isDebugLevel, resolveAuthDir } from "./config";
 import { ProviderRegistry } from "./providers/registry";
 import { extractApiKey, hashApiKey } from "./utils/common";
 import {
@@ -156,6 +157,12 @@ export function createServer(
     ? new GoGuard(config["go-guard"], {
         persist: opts.persistGoGuard,
         now: opts.now,
+        countsFile: path.join(
+          resolveAuthDir(config["auth-dir"]),
+          "go-guard-counts.json",
+        ),
+        onLimit: (message) =>
+          void notifier?.post(`Shared relay limit reached: ${message}`),
       })
     : undefined;
   const goPool = new GoKeyPool(config["opencode-go"]?.keys ?? []);
@@ -519,24 +526,53 @@ export function createServer(
   app.post("/admin/go-guard/go-aheads", (req, res) => {
     if (!goGuard) {
       res.status(409).json({
-        error: { message: "go-guard is not configured on this relay" },
+        error: {
+          message:
+            "this relay has no go-guard section in config.yaml; add one to use go-aheads",
+        },
       });
       return;
     }
+    let go;
     try {
-      const go = validateGoAhead(req.body);
+      go = validateGoAhead(req.body);
+    } catch (e) {
+      res.status(400).json({ error: { message: (e as Error).message } });
+      return;
+    }
+    try {
       goGuard.setGoAhead(go);
       res.json(go);
     } catch (e) {
-      res.status(400).json({ error: { message: (e as Error).message } });
+      console.error(
+        `[go-guard] could not save the config: ${(e as Error).message}`,
+      );
+      res
+        .status(500)
+        .json({
+          error: {
+            message: "could not save the go-ahead; nothing was changed",
+          },
+        });
     }
   });
   app.delete("/admin/go-guard/go-aheads/:agent", (req, res) => {
-    if (!goGuard?.removeGoAhead(req.params.agent)) {
-      res.status(404).json({ error: { message: "no such go-ahead" } });
-      return;
+    try {
+      if (!goGuard?.removeGoAhead(req.params.agent)) {
+        res.status(404).json({ error: { message: "no such go-ahead" } });
+        return;
+      }
+      res.json({ removed: req.params.agent });
+    } catch (e) {
+      console.error(
+        `[go-guard] could not save the config: ${(e as Error).message}`,
+      );
+      res
+        .status(500)
+        .json({
+          error: { message: "could not save the change; nothing was removed" },
+        });
     }
-    res.json({ removed: req.params.agent });
   });
 
   // GET /admin/stats — three-axis aggregated call statistics.
